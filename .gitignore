@@ -1,6 +1,7 @@
 node_modules/
 .local-agent-config.json
 .local-vps-servers.json
+.local-security.json
 .gmail-inbox-cache.txt
 .env
 .DS_Store

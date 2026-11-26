@@ -42,6 +42,8 @@ import {
   Laptop,
   Copy,
   Check,
+  ShieldCheck,
+  Lock,
 } from 'lucide-react';
 import { Lang, translations } from './i18n';
 
@@ -195,6 +197,53 @@ export default function App() {
   const [bannerVisible, setBannerVisible] = useState<boolean>(true);
   const [globalSearch, setGlobalSearch] = useState('');
   const [installModalOpen, setInstallModalOpen] = useState(false);
+
+  // Security & Admin PIN Protection State
+  const [secModalOpen, setSecModalOpen] = useState(false);
+  const [secStatus, setSecStatus] = useState<{ pinEnabled: boolean; authenticated: boolean; bindHost: string }>({
+    pinEnabled: false,
+    authenticated: true,
+    bindHost: '127.0.0.1',
+  });
+  const [unlockPinInput, setUnlockPinInput] = useState('');
+  const [unlockErr, setUnlockErr] = useState('');
+
+  const checkSecurityStatus = async () => {
+    try {
+      const res = await fetch('/api/security/status');
+      const data = await res.json();
+      setSecStatus({
+        pinEnabled: Boolean(data.pinEnabled),
+        authenticated: Boolean(data.authenticated),
+        bindHost: data.bindHost || '127.0.0.1',
+      });
+    } catch {
+      // ignore
+    }
+  };
+
+  useEffect(() => {
+    checkSecurityStatus();
+  }, []);
+
+  const handleUnlockWithPin = async (e: React.FormEvent) => {
+    e.preventDefault();
+    setUnlockErr('');
+    const res = await fetch('/api/security/verify', {
+      method: 'POST',
+      headers: { 'Content-Type': 'application/json' },
+      body: JSON.stringify({ pin: unlockPinInput }),
+    });
+    const data = await res.json();
+    if (data.ok && data.token) {
+      localStorage.setItem('smartmac_sec_token', data.token);
+      setUnlockPinInput('');
+      await checkSecurityStatus();
+      window.location.reload();
+    } else {
+      setUnlockErr(lang === 'vi' ? 'Mã PIN không chính xác' : 'Incorrect Admin PIN');
+    }
+  };
 
   // Bell Icon: 3-Day Unread Gmail Notification State
   const [bellOpen, setBellOpen] = useState(false);
@@ -647,6 +696,23 @@ export default function App() {
               </button>
             </div>
 
+            {/* Security Shield / Admin PIN Lock Icon */}
+            <button
+              onClick={() => setSecModalOpen(true)}
+              className={`p-2 rounded-lg border transition cursor-pointer flex items-center gap-1 ${
+                secStatus.pinEnabled
+                  ? 'border-emerald-200 bg-emerald-50 text-emerald-700 hover:bg-emerald-100'
+                  : 'border-slate-200 bg-slate-50 text-slate-600 hover:bg-slate-100'
+              }`}
+              title={
+                lang === 'vi'
+                  ? 'Bảo mật & Khóa mã PIN Quản trị (127.0.0.1 Protected)'
+                  : 'Security & Admin PIN Lock (127.0.0.1 Protected)'
+              }
+            >
+              <ShieldCheck className="w-4 h-4" />
+            </button>
+
             {/* App-Only Light / Dark Background Toggle Icon */}
             <button
               onClick={toggleAppTheme}
@@ -873,6 +939,62 @@ export default function App() {
           <OneCommandModal t={t} onClose={() => setInstallModalOpen(false)} />
         )}
 
+        {/* Security & Admin PIN Settings Modal */}
+        {secModalOpen && (
+          <SecurityPinModal
+            lang={lang}
+            secStatus={secStatus}
+            onClose={() => setSecModalOpen(false)}
+            onUpdated={() => {
+              checkSecurityStatus();
+              showToast(lang === 'vi' ? 'Đã cập nhật cài đặt bảo mật!' : 'Security settings updated!');
+            }}
+          />
+        )}
+
+        {/* Full-Screen Admin PIN Lock Screen when PIN is enabled and not authenticated */}
+        {secStatus.pinEnabled && !secStatus.authenticated && (
+          <div className="fixed inset-0 z-50 bg-slate-950/90 backdrop-blur-md flex items-center justify-center p-4">
+            <form
+              onSubmit={handleUnlockWithPin}
+              className="bg-white rounded-2xl border border-slate-200 shadow-2xl max-w-sm w-full p-6 text-center space-y-4"
+            >
+              <div className="w-12 h-12 rounded-2xl bg-orange-50 text-[#F26522] flex items-center justify-center mx-auto">
+                <Lock className="w-6 h-6" />
+              </div>
+              <div>
+                <h3 className="text-base font-extrabold text-slate-900">
+                  {lang === 'vi' ? 'SmartMac Đang Khóa Bảo Mật' : 'SmartMac Security Lock'}
+                </h3>
+                <p className="text-xs text-slate-500 mt-1">
+                  {lang === 'vi'
+                    ? 'Nhập mã PIN quản trị của bạn để mở khóa bảng điều khiển.'
+                    : 'Enter your local Admin PIN to unlock the system dashboard.'}
+                </p>
+              </div>
+              {unlockErr && (
+                <div className="p-2 rounded-lg bg-rose-50 text-rose-600 text-xs font-semibold">
+                  {unlockErr}
+                </div>
+              )}
+              <input
+                type="password"
+                autoFocus
+                value={unlockPinInput}
+                onChange={(e) => setUnlockPinInput(e.target.value)}
+                placeholder={lang === 'vi' ? 'Nhập mã PIN...' : 'Enter Admin PIN...'}
+                className="w-full px-4 py-2.5 rounded-xl bg-slate-50 border border-slate-200 text-center text-sm font-bold tracking-widest text-slate-900 focus:outline-none focus:border-[#F26522]"
+              />
+              <button
+                type="submit"
+                className="w-full py-2.5 rounded-xl bg-[#F26522] hover:bg-orange-600 text-white text-xs font-bold cursor-pointer"
+              >
+                {lang === 'vi' ? 'Mở Khóa Hệ Thống' : 'Unlock Dashboard'}
+              </button>
+            </form>
+          </div>
+        )}
+
         {/* PAGE CONTENT + OPTIONAL AI DRAWER */}
         <div className="flex-1 flex overflow-hidden">
           <main className="flex-1 overflow-y-auto p-6 space-y-5">
@@ -946,6 +1068,177 @@ export default function App() {
           </main>
 
           {agentOpen && <AIAgentDrawer t={t} lang={lang} onClose={() => setAgentOpen(false)} onToast={showToast} />}
+        </div>
+      </div>
+    </div>
+  );
+}
+
+function SecurityPinModal({
+  lang,
+  secStatus,
+  onClose,
+  onUpdated,
+}: {
+  lang: Lang;
+  secStatus: { pinEnabled: boolean; authenticated: boolean; bindHost: string };
+  onClose: () => void;
+  onUpdated: () => void;
+}) {
+  const isVi = lang === 'vi';
+  const [currentPin, setCurrentPin] = useState('');
+  const [newPin, setNewPin] = useState('');
+  const [err, setErr] = useState('');
+
+  const handleSavePin = async (e: React.FormEvent) => {
+    e.preventDefault();
+    setErr('');
+    const res = await fetch('/api/security/set-pin', {
+      method: 'POST',
+      headers: { 'Content-Type': 'application/json' },
+      body: JSON.stringify({ currentPin, newPin }),
+    });
+    const data = await res.json();
+    if (!res.ok || !data.ok) {
+      setErr(data.message || 'Failed to update PIN');
+      return;
+    }
+    if (data.token) {
+      localStorage.setItem('smartmac_sec_token', data.token);
+    } else {
+      localStorage.removeItem('smartmac_sec_token');
+    }
+    onUpdated();
+    onClose();
+  };
+
+  return (
+    <div className="fixed inset-0 z-50 bg-slate-900/50 backdrop-blur-xs flex items-center justify-center p-4">
+      <div className="bg-white rounded-2xl border border-slate-200 shadow-2xl max-w-lg w-full overflow-hidden">
+        <div className="bg-[#1B2537] text-white p-4 flex items-center justify-between">
+          <div className="flex items-center gap-2.5">
+            <ShieldCheck className="w-5 h-5 text-emerald-400" />
+            <div>
+              <h3 className="text-sm font-bold">
+                {isVi ? 'Trung Tâm Bảo Mật & Khóa Mã PIN' : 'Security Center & Admin PIN Lock'}
+              </h3>
+              <p className="text-[11px] text-slate-300">
+                {isVi ? 'Bảo vệ máy tính khỏi truy cập trái phép qua mạng LAN & Web' : 'Protects your machine from unauthorized LAN & Web access'}
+              </p>
+            </div>
+          </div>
+          <button onClick={onClose} className="text-slate-300 hover:text-white p-1">
+            <X className="w-4 h-4" />
+          </button>
+        </div>
+
+        <div className="p-5 space-y-4 text-xs">
+          {/* Active Security Layers Checklist */}
+          <div className="p-3.5 rounded-xl bg-emerald-50/70 border border-emerald-200 space-y-1.5 text-emerald-900">
+            <div className="font-bold flex items-center gap-1.5 text-emerald-700">
+              <CheckCircle2 className="w-4 h-4" />
+              <span>{isVi ? 'Các Lớp Bảo Mật Đang Bật Mặc Định:' : 'Active Built-in Security Protections:'}</span>
+            </div>
+            <ul className="list-disc list-inside space-y-1 text-[11px] text-slate-700">
+              <li>
+                <strong>Loopback-Only Binding (<code>{secStatus.bindHost}</code>):</strong>{' '}
+                {isVi
+                  ? 'Chỉ máy tính của bạn mới truy cập được cổng 4000 (chặn hoàn toàn người lạ cùng mạng Wi-Fi).'
+                  : 'Only your local computer can access port 4000 (blocks anyone else on the same Wi-Fi/LAN).'}
+              </li>
+              <li>
+                <strong>Anti-CSRF & DNS Rebinding Guard:</strong>{' '}
+                {isVi
+                  ? 'Chặn mọi trang web độc hại bên ngoài gọi lén vào localhost API.'
+                  : 'Blocks external websites in other browser tabs from calling localhost APIs.'}
+              </li>
+              <li>
+                <strong>Safe Process Execution (<code>execFile</code>) & <code>0600</code> Secrets:</strong>{' '}
+                {isVi
+                  ? 'Chống lỗ hổng Command Injection và khóa quyền đọc file token OAuth2.'
+                  : 'Prevents shell injection and locks OAuth2 config files to owner-only permissions.'}
+              </li>
+            </ul>
+          </div>
+
+          {/* Set / Remove Admin PIN Form */}
+          <form onSubmit={handleSavePin} className="space-y-3 pt-2 border-t border-slate-100">
+            <div className="flex items-center justify-between">
+              <span className="font-bold text-slate-800">
+                {isVi ? 'Cài Đặt Mã PIN Khóa Bảng Điều Khiển' : 'Dashboard Admin PIN Lock'}
+              </span>
+              <span
+                className={`px-2 py-0.5 rounded-full text-[10px] font-bold ${
+                  secStatus.pinEnabled
+                    ? 'bg-emerald-100 text-emerald-700'
+                    : 'bg-slate-100 text-slate-600'
+                }`}
+              >
+                {secStatus.pinEnabled ? (isVi ? 'ĐANG BẬT' : 'PIN ENABLED') : isVi ? 'CHƯA ĐẶT PIN' : 'NO PIN SET'}
+              </span>
+            </div>
+
+            {err && <div className="p-2 rounded bg-rose-50 text-rose-600 font-semibold">{err}</div>}
+
+            {secStatus.pinEnabled && (
+              <div>
+                <label className="text-[11px] text-slate-500 block mb-1">
+                  {isVi ? 'Mã PIN hiện tại *' : 'Current Admin PIN *'}
+                </label>
+                <input
+                  type="password"
+                  required
+                  value={currentPin}
+                  onChange={(e) => setCurrentPin(e.target.value)}
+                  placeholder="••••"
+                  className="w-full px-3 py-1.5 rounded-lg bg-slate-50 border border-slate-200 text-slate-800"
+                />
+              </div>
+            )}
+
+            <div>
+              <label className="text-[11px] text-slate-500 block mb-1">
+                {isVi
+                  ? 'Mã PIN mới (Để trống nếu muốn tắt khóa PIN)'
+                  : 'New Admin PIN (Leave empty to disable PIN lock)'}
+              </label>
+              <input
+                type="password"
+                value={newPin}
+                onChange={(e) => setNewPin(e.target.value)}
+                placeholder={isVi ? 'Nhập mã PIN bảo mật mới...' : 'Enter new Admin PIN...'}
+                className="w-full px-3 py-1.5 rounded-lg bg-slate-50 border border-slate-200 text-slate-800"
+              />
+            </div>
+
+            <div className="flex justify-end gap-2 pt-2">
+              {secStatus.pinEnabled && (
+                <button
+                  type="button"
+                  onClick={() => {
+                    localStorage.removeItem('smartmac_sec_token');
+                    window.location.reload();
+                  }}
+                  className="px-3 py-1.5 rounded-lg bg-amber-50 text-amber-700 border border-amber-200 font-semibold cursor-pointer"
+                >
+                  {isVi ? 'Khóa Ngay' : 'Lock Now'}
+                </button>
+              )}
+              <button
+                type="button"
+                onClick={onClose}
+                className="px-4 py-1.5 rounded-lg bg-slate-100 text-slate-600 font-semibold cursor-pointer"
+              >
+                {isVi ? 'Đóng' : 'Cancel'}
+              </button>
+              <button
+                type="submit"
+                className="px-4 py-1.5 rounded-lg bg-[#F26522] hover:bg-orange-600 text-white font-bold cursor-pointer"
+              >
+                {isVi ? 'Lưu Mã PIN' : 'Save PIN'}
+              </button>
+            </div>
+          </form>
         </div>
       </div>
     </div>

@@ -1,10 +1,10 @@
 import fs from 'fs/promises';
 import path from 'path';
 import os from 'os';
-import { exec } from 'child_process';
+import { execFile } from 'child_process';
 import { promisify } from 'util';
 
-const execAsync = promisify(exec);
+const execFileAsync = promisify(execFile);
 
 export interface FileEntry {
   name: string;
@@ -132,16 +132,29 @@ export async function renameEntry(oldPath: string, newName: string): Promise<{ o
 
 export async function moveToTrash(targetPath: string): Promise<{ ok: boolean; message: string }> {
   const resolved = path.resolve(targetPath.replace(/^~/, os.homedir()));
-  const trashPath = path.join(os.homedir(), '.Trash', `${Date.now()}_${path.basename(resolved)}`);
+  const trashDir =
+    os.platform() === 'darwin'
+      ? path.join(os.homedir(), '.Trash')
+      : path.join(os.homedir(), '.SmartMac-Trash');
+  await fs.mkdir(trashDir, { recursive: true });
+  const trashPath = path.join(trashDir, `${Date.now()}_${path.basename(resolved)}`);
   await fs.rename(resolved, trashPath);
   return { ok: true, message: `Moved ${path.basename(resolved)} to Trash` };
 }
 
 export async function revealInFinder(targetPath: string): Promise<{ ok: boolean; message: string }> {
   const resolved = path.resolve(targetPath.replace(/^~/, os.homedir()));
-  const safePath = resolved.replace(/"/g, '\\"');
-  await execAsync(`open -R "${safePath}"`);
-  return { ok: true, message: `Revealed ${path.basename(resolved)} in Finder` };
+  const platform = os.platform();
+  if (platform === 'darwin') {
+    await execFileAsync('open', ['-R', resolved]);
+    return { ok: true, message: `Revealed ${path.basename(resolved)} in Finder` };
+  } else if (platform === 'win32') {
+    await execFileAsync('explorer.exe', [`/select,${resolved}`]).catch(() => {});
+    return { ok: true, message: `Revealed ${path.basename(resolved)} in Windows Explorer` };
+  } else {
+    await execFileAsync('xdg-open', [path.dirname(resolved)]);
+    return { ok: true, message: `Opened folder in File Manager` };
+  }
 }
 
 export async function searchFilesInDir(dirPath: string, query: string): Promise<FileEntry[]> {

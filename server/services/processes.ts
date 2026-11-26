@@ -1,12 +1,12 @@
 import si from 'systeminformation';
-import { exec } from 'child_process';
+import { execFile } from 'child_process';
 import { promisify } from 'util';
 import fs from 'fs/promises';
 import fsSync from 'fs';
 import path from 'path';
 import os from 'os';
 
-const execAsync = promisify(exec);
+const execFileAsync = promisify(execFile);
 
 export interface ProcessItem {
   pid: number;
@@ -195,7 +195,7 @@ export async function getAppIconPngPath(appPath?: string, appName?: string): Pro
       icnsFiles.find((f) => f.toLowerCase().includes('appicon')) || icnsFiles[0];
     const icnsFullPath = path.join(resDir, preferred);
 
-    await execAsync(`sips -s format png -Z 64 "${icnsFullPath}" --out "${outPng}" 2>/dev/null`);
+    await execFileAsync('sips', ['-s', 'format', 'png', '-Z', '64', icnsFullPath, '--out', outPng]);
     if (fsSync.existsSync(outPng)) {
       resolvedIconMap.set(targetAppPath, outPng);
       return outPng;
@@ -210,18 +210,21 @@ export async function getAppIconPngPath(appPath?: string, appName?: string): Pro
 
 export async function launchApplication(appNameOrPath: string): Promise<{ ok: boolean; message: string }> {
   const platform = os.platform();
-  const safeName = appNameOrPath.replace(/["`$\\]/g, '');
+  const safeName = (appNameOrPath || '').trim();
+  if (!safeName || /[;&|`$]/.test(safeName)) {
+    return { ok: false, message: 'Blocked unsafe application name/path' };
+  }
   try {
     if (platform === 'darwin') {
       if (safeName.endsWith('.app') || safeName.startsWith('/')) {
-        await execAsync(`open "${safeName}"`);
+        await execFileAsync('open', [safeName]);
       } else {
-        await execAsync(`open -a "${safeName}"`);
+        await execFileAsync('open', ['-a', safeName]);
       }
     } else if (platform === 'win32') {
-      await execAsync(`start "" "${safeName}"`);
+      await execFileAsync('cmd.exe', ['/c', 'start', '', safeName]);
     } else {
-      await execAsync(`xdg-open "${safeName}" || "${safeName}" &`);
+      await execFileAsync('xdg-open', [safeName]);
     }
     return { ok: true, message: `Launched "${safeName}"` };
   } catch (err: any) {
@@ -231,14 +234,17 @@ export async function launchApplication(appNameOrPath: string): Promise<{ ok: bo
 
 export async function quitApplication(appName: string): Promise<{ ok: boolean; message: string }> {
   const platform = os.platform();
-  const safeName = appName.replace(/["`$\\]/g, '');
+  const safeName = (appName || '').replace(/[^a-zA-Z0-9 ._-]/g, '');
+  if (!safeName) {
+    return { ok: false, message: 'Invalid application name' };
+  }
   try {
     if (platform === 'darwin') {
-      await execAsync(`osascript -e 'quit app "${safeName}"'`);
+      await execFileAsync('osascript', ['-e', `quit app "${safeName}"`]);
     } else if (platform === 'win32') {
-      await execAsync(`taskkill /IM "${safeName}.exe"`);
+      await execFileAsync('taskkill', ['/IM', `${safeName}.exe`]);
     } else {
-      await execAsync(`pkill -f "${safeName}"`);
+      await execFileAsync('pkill', ['-f', safeName]);
     }
     return { ok: true, message: `Sent quit command to "${safeName}"` };
   } catch (err: any) {

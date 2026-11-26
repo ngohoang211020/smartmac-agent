@@ -95,7 +95,7 @@ export async function saveConfig(partial: Partial<AgentAndGmailConfig>): Promise
       appPassword: partial.gmail?.appPassword ?? existing.gmail?.appPassword ?? '',
     },
   };
-  await fs.writeFile(CONFIG_PATH, JSON.stringify(merged, null, 2), 'utf-8');
+  await fs.writeFile(CONFIG_PATH, JSON.stringify(merged, null, 2), { encoding: 'utf-8', mode: 0o600 });
   return merged;
 }
 
@@ -117,7 +117,7 @@ export async function resetGmailSession(): Promise<{ ok: boolean; message: strin
       appPassword: '',
     },
   };
-  await fs.writeFile(CONFIG_PATH, JSON.stringify(cleaned, null, 2), 'utf-8');
+  await fs.writeFile(CONFIG_PATH, JSON.stringify(cleaned, null, 2), { encoding: 'utf-8', mode: 0o600 });
   return {
     ok: true,
     message: 'Cleared all saved Gmail OAuth tokens, sessions, and local inbox cache. Ready to sign in again.',

@@ -40,13 +40,60 @@ import {
   listLocalSshKeys,
 } from './services/vps.js';
 import { processAgentMessage } from './services/agent.js';
+import {
+  strictLocalOriginGuard,
+  adminPinAuthGuard,
+  getSecurityStatus,
+  saveSecurityPin,
+  verifySecurityPin,
+} from './security.js';
 
 const __filename = fileURLToPath(import.meta.url);
 const __dirname = path.dirname(__filename);
 
 const app = express();
-app.use(cors());
+app.use(strictLocalOriginGuard);
+app.use(
+  cors({
+    origin: (origin, callback) => {
+      if (!origin || /^https?:\/\/(localhost|127\.0\.0\.1|\[::1\])(:\d+)?$/i.test(origin)) {
+        callback(null, true);
+      } else {
+        callback(new Error('Blocked by strict localhost CORS policy'));
+      }
+    },
+  })
+);
 app.use(express.json({ limit: '5mb' }));
+app.use('/api', adminPinAuthGuard);
+
+// --- SECURITY & ADMIN PIN ROUTES ---
+app.get('/api/security/status', (req, res) => {
+  const token = String(req.headers['x-smartmac-token'] || '');
+  res.json(getSecurityStatus(token));
+});
+
+app.post('/api/security/verify', (req, res) => {
+  const { pin } = req.body;
+  const result = verifySecurityPin(String(pin || ''));
+  if (!result.ok) {
+    return res.status(401).json({ ok: false, message: 'Invalid Admin PIN' });
+  }
+  res.json(result);
+});
+
+app.post('/api/security/set-pin', async (req, res) => {
+  const { currentPin, newPin } = req.body;
+  const status = getSecurityStatus();
+  if (status.pinEnabled) {
+    const check = verifySecurityPin(String(currentPin || ''));
+    if (!check.ok) {
+      return res.status(401).json({ ok: false, message: 'Current PIN is incorrect' });
+    }
+  }
+  const result = await saveSecurityPin(newPin ? String(newPin) : null);
+  res.json(result);
+});
 
 // --- SYSTEM & HARDWARE ROUTES ---
 app.get('/api/system/snapshot', async (_req, res) => {
@@ -407,12 +454,19 @@ if (fs.existsSync(distDir)) {
 
 // --- HTTP & WEBSOCKET SERVER FOR REAL-TIME TELEMETRY ---
 const PORT = Number(process.env.PORT) || 4000;
+const HOST = process.env.HOST || '127.0.0.1';
 const server = createServer(app);
 const wss = new WebSocketServer({ server, path: '/ws' });
 
 const clients = new Set<WebSocket>();
 
-wss.on('connection', async (ws) => {
+wss.on('connection', async (ws, req) => {
+  // Block external origin WebSocket hijacking
+  const origin = req.headers.origin;
+  if (origin && !/^https?:\/\/(localhost|127\.0\.0\.1|\[::1\])(:\d+)?$/i.test(origin)) {
+    ws.close(1008, 'Untrusted origin');
+    return;
+  }
   clients.add(ws);
   try {
     const initial = await getSystemSnapshot();
@@ -442,6 +496,6 @@ setInterval(async () => {
   }
 }, 2000);
 
-server.listen(PORT, () => {
-  console.log(`SmartMac Agent Server listening on http://localhost:${PORT}`);
+server.listen(PORT, HOST, () => {
+  console.log(`SmartMac Agent Server listening securely on http://${HOST}:${PORT} (Loopback Protected)`);
 });

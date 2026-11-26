@@ -1,10 +1,11 @@
 import fs from 'fs/promises';
 import path from 'path';
-import { exec } from 'child_process';
+import { exec, execFile } from 'child_process';
 import { promisify } from 'util';
 import os from 'os';
 
 const execAsync = promisify(exec);
+const execFileAsync = promisify(execFile);
 const VPS_STORE_PATH = path.join(process.cwd(), '.local-vps-servers.json');
 
 export interface VpsServerProfile {
@@ -53,14 +54,14 @@ export async function saveVpsServer(server: Omit<VpsServerProfile, 'id'> & { id?
   };
   const filtered = existing.filter((s) => s.id !== id);
   const updated = [newEntry, ...filtered];
-  await fs.writeFile(VPS_STORE_PATH, JSON.stringify(updated, null, 2), 'utf-8');
+  await fs.writeFile(VPS_STORE_PATH, JSON.stringify(updated, null, 2), { encoding: 'utf-8', mode: 0o600 });
   return updated;
 }
 
 export async function deleteVpsServer(id: string): Promise<VpsServerProfile[]> {
   const existing = await listVpsServers();
   const updated = existing.filter((s) => s.id !== id);
-  await fs.writeFile(VPS_STORE_PATH, JSON.stringify(updated, null, 2), 'utf-8');
+  await fs.writeFile(VPS_STORE_PATH, JSON.stringify(updated, null, 2), { encoding: 'utf-8', mode: 0o600 });
   return updated;
 }
 
@@ -109,8 +110,28 @@ export async function executeRemoteVpsCommand(
   command: string
 ): Promise<{ ok: boolean; output: string }> {
   try {
-    const fullCmd = buildSshCommand(srv, command);
-    const { stdout, stderr } = await execAsync(fullCmd, { timeout: 15000 });
+    const safeHost = (srv.host || '').replace(/[^a-zA-Z0-9.-]/g, '');
+    const safeUser = (srv.username || 'root').replace(/[^a-zA-Z0-9._-]/g, '');
+    const safePort = String(Number(srv.port) || 22);
+    if (!safeHost) {
+      return { ok: false, output: 'Invalid VPS host address' };
+    }
+    const sshArgs: string[] = [
+      '-p',
+      safePort,
+      '-o',
+      'StrictHostKeyChecking=accept-new',
+      '-o',
+      'ConnectTimeout=6',
+      '-o',
+      'BatchMode=yes',
+    ];
+    if (srv.authType === 'key' && srv.keyPath) {
+      sshArgs.push('-i', srv.keyPath.replace(/^~/, os.homedir()));
+    }
+    sshArgs.push(`${safeUser}@${safeHost}`, command);
+
+    const { stdout, stderr } = await execFileAsync('ssh', sshArgs, { timeout: 15000 });
     return {
       ok: true,
       output: (stdout || stderr || 'Command executed (no output)').trim(),

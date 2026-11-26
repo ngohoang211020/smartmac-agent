@@ -1,4 +1,5 @@
 node_modules/
+.vite/
 .local-agent-config.json
 .local-vps-servers.json
 .local-security.json

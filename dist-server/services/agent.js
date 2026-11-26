@@ -1,4 +1,3 @@
-import { GoogleGenAI } from '@google/genai';
 import { getSystemSnapshot, runQuickSystemAction } from './system.js';
 import { getTopProcesses, launchApplication, quitApplication, killProcessByPid } from './processes.js';
 import { listDirectory, createFolder } from './files.js';
@@ -116,10 +115,9 @@ export async function processAgentMessage(userMessage, history = [], lang = 'vi'
     ]);
     const cfg = await loadConfig();
     const apiKey = cfg.geminiApiKey || process.env.GEMINI_API_KEY;
-    // If Gemini API key is configured, use @google/genai with live system context
+    // If Gemini API key is configured, call Gemini 2.5 Flash REST API directly with live system context
     if (apiKey) {
         try {
-            const ai = new GoogleGenAI({ apiKey });
             const systemContext = JSON.stringify({
                 hostname: sys.hostname,
                 platform: sys.platform,
@@ -149,32 +147,39 @@ export async function processAgentMessage(userMessage, history = [], lang = 'vi'
                 status: 'ok',
                 summary: `Inspected CPU (${sys.cpu.currentLoad}%), RAM (${sys.memory.usagePercent}%), Wi-Fi (${net.wifi.ssid || 'N/A'})`,
             });
-            const response = await ai.models.generateContent({
-                model: 'gemini-2.5-flash',
-                contents: [
-                    ...history.slice(-6).map((h) => ({
-                        role: h.role === 'assistant' ? 'model' : 'user',
-                        parts: [{ text: h.content }],
-                    })),
-                    {
-                        role: 'user',
-                        parts: [
-                            {
-                                text: `You are "Housework Agent", a local macOS system administrator AI assistant running directly on the user's MacBook.
-Current live macOS telemetry:
+            const geminiRes = await fetch(`https://generativelanguage.googleapis.com/v1beta/models/gemini-2.5-flash:generateContent?key=${encodeURIComponent(apiKey)}`, {
+                method: 'POST',
+                headers: { 'Content-Type': 'application/json' },
+                body: JSON.stringify({
+                    contents: [
+                        ...history.slice(-6).map((h) => ({
+                            role: h.role === 'assistant' ? 'model' : 'user',
+                            parts: [{ text: h.content }],
+                        })),
+                        {
+                            role: 'user',
+                            parts: [
+                                {
+                                    text: `You are "SmartMac Agent", a local system administrator AI assistant running directly on the user's computer (${isVi ? 'Respond in Vietnamese' : 'Respond in English'}).
+Current live system telemetry:
 ${systemContext}
 
 Answer the user's request concisely with helpful markdown formatting.
 User request: ${userMessage}`,
-                            },
-                        ],
-                    },
-                ],
+                                },
+                            ],
+                        },
+                    ],
+                }),
             });
-            return {
-                reply: response.text || 'Task completed.',
-                actions,
-            };
+            const geminiJson = await geminiRes.json();
+            const textReply = geminiJson?.candidates?.[0]?.content?.parts?.[0]?.text;
+            if (textReply) {
+                return {
+                    reply: textReply,
+                    actions,
+                };
+            }
         }
         catch (err) {
             actions.push({

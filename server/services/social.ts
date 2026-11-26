@@ -1,6 +1,5 @@
 import fs from 'fs/promises';
 import path from 'path';
-import { google } from 'googleapis';
 import { ImapFlow } from 'imapflow';
 import nodemailer from 'nodemailer';
 import { exec } from 'child_process';
@@ -19,15 +18,6 @@ function openUrlCrossPlatform(url: string) {
 const CONFIG_PATH = path.join(process.cwd(), '.local-agent-config.json');
 const CACHE_PATH = path.join(process.cwd(), '.gmail-inbox-cache.txt');
 
-/**
- * DEFAULT BUILT-IN GOOGLE OAUTH2 CREDENTIALS FOR YOUR OPEN-SOURCE PACKAGE
- * -----------------------------------------------------------------------
- * As the creator of `smartmac-agent`, you only create ONE Google Cloud OAuth 2.0 Client ID
- * (Application type: "Desktop app" or "Web application" with Redirect URI http://localhost:4000/api/social/gmail/oauth/callback)
- * and place it here (or via env).
- * Every user who installs your package via `npx smartmac-agent` can then click
- * "Sign in with Google" immediately without creating their own Google Cloud project!
- */
 export const DEFAULT_OAUTH_CLIENT_ID =
   process.env.SMARTMAC_DEFAULT_GOOGLE_CLIENT_ID || process.env.GOOGLE_CLIENT_ID || '';
 export const DEFAULT_OAUTH_CLIENT_SECRET =
@@ -99,9 +89,6 @@ export async function saveConfig(partial: Partial<AgentAndGmailConfig>): Promise
   return merged;
 }
 
-/**
- * Completely resets all stored Gmail tokens, cached emails, and local memory so user can sign in fresh
- */
 export async function resetGmailSession(): Promise<{ ok: boolean; message: string }> {
   await fs.unlink(CACHE_PATH).catch(() => {});
   const existing = await loadConfig();
@@ -124,7 +111,7 @@ export async function resetGmailSession(): Promise<{ ok: boolean; message: strin
   };
 }
 
-function createOAuth2Client(cfg: AgentAndGmailConfig) {
+function getOAuthClientParams(cfg: AgentAndGmailConfig) {
   const clientId = cfg.gmail?.clientId || DEFAULT_OAUTH_CLIENT_ID;
   const clientSecret = cfg.gmail?.clientSecret || DEFAULT_OAUTH_CLIENT_SECRET;
   const port = process.env.PORT || '4000';
@@ -132,57 +119,72 @@ function createOAuth2Client(cfg: AgentAndGmailConfig) {
     cfg.gmail?.redirectUri ||
     process.env.GOOGLE_REDIRECT_URI ||
     `http://localhost:${port}/api/social/gmail/oauth/callback`;
-
-  if (!clientId || !clientSecret) {
-    throw new Error('NO_DEFAULT_OAUTH_CLIENT');
-  }
-  return new google.auth.OAuth2(clientId, clientSecret, redirectUri);
+  return { clientId, clientSecret, redirectUri };
 }
 
-/**
- * Generates Google OAuth 2.0 Authorization URL for Gmail
- */
 export async function getGmailOAuthUrl(): Promise<{ ok: boolean; url?: string; error?: string }> {
-  try {
-    const cfg = await loadConfig();
-    const oauth2Client = createOAuth2Client(cfg);
-    const url = oauth2Client.generateAuthUrl({
-      access_type: 'offline',
-      prompt: 'consent select_account',
-      scope: [
-        'https://www.googleapis.com/auth/gmail.readonly',
-        'https://www.googleapis.com/auth/gmail.send',
-        'https://www.googleapis.com/auth/gmail.modify',
-        'https://www.googleapis.com/auth/userinfo.email',
-      ],
-    });
-    return { ok: true, url };
-  } catch (err: any) {
-    return { ok: false, error: err.message };
+  const cfg = await loadConfig();
+  const { clientId, clientSecret, redirectUri } = getOAuthClientParams(cfg);
+  if (!clientId || !clientSecret) {
+    return { ok: false, error: 'Missing Google OAuth2 Client ID or Client Secret.' };
   }
+  const scopes = [
+    'https://www.googleapis.com/auth/gmail.readonly',
+    'https://www.googleapis.com/auth/gmail.send',
+    'https://www.googleapis.com/auth/gmail.modify',
+    'https://www.googleapis.com/auth/userinfo.email',
+  ];
+  const params = new URLSearchParams({
+    client_id: clientId,
+    redirect_uri: redirectUri,
+    response_type: 'code',
+    access_type: 'offline',
+    prompt: 'consent select_account',
+    scope: scopes.join(' '),
+  });
+  return {
+    ok: true,
+    url: `https://accounts.google.com/o/oauth2/v2/auth?${params.toString()}`,
+  };
 }
 
-/**
- * Handles the Google OAuth2 callback code exchange and fetches the user's Gmail address
- */
 export async function handleGmailOAuthCallback(code: string): Promise<{ ok: boolean; email?: string; error?: string }> {
   try {
     const cfg = await loadConfig();
-    const oauth2Client = createOAuth2Client(cfg);
-    const { tokens } = await oauth2Client.getToken(code);
-    oauth2Client.setCredentials(tokens);
+    const { clientId, clientSecret, redirectUri } = getOAuthClientParams(cfg);
+    if (!clientId || !clientSecret) {
+      throw new Error('Missing Google OAuth2 Client ID or Client Secret.');
+    }
 
-    const gmailApi = google.gmail({ version: 'v1', auth: oauth2Client });
-    const profile = await gmailApi.users.getProfile({ userId: 'me' });
-    const emailAddress = profile.data.emailAddress || cfg.gmail?.email || 'Connected via OAuth2';
+    const tokenRes = await fetch('https://oauth2.googleapis.com/token', {
+      method: 'POST',
+      headers: { 'Content-Type': 'application/x-www-form-urlencoded' },
+      body: new URLSearchParams({
+        code,
+        client_id: clientId,
+        client_secret: clientSecret,
+        redirect_uri: redirectUri,
+        grant_type: 'authorization_code',
+      }).toString(),
+    });
+    const tokens: any = await tokenRes.json();
+    if (!tokenRes.ok || !tokens.access_token) {
+      throw new Error(tokens.error_description || tokens.error || `Token HTTP ${tokenRes.status}`);
+    }
+
+    const profRes = await fetch('https://gmail.googleapis.com/gmail/v1/users/me/profile', {
+      headers: { Authorization: `Bearer ${tokens.access_token}` },
+    });
+    const prof: any = profRes.ok ? await profRes.json() : {};
+    const emailAddress = prof.emailAddress || cfg.gmail?.email || 'Connected via OAuth2';
 
     await saveConfig({
       gmail: {
         ...cfg.gmail,
         email: emailAddress,
-        accessToken: tokens.access_token || cfg.gmail?.accessToken || '',
+        accessToken: tokens.access_token,
         refreshToken: tokens.refresh_token || cfg.gmail?.refreshToken || '',
-        expiryDate: tokens.expiry_date || undefined,
+        expiryDate: tokens.expires_in ? Date.now() + Number(tokens.expires_in) * 1000 : undefined,
       },
     });
 
@@ -190,6 +192,45 @@ export async function handleGmailOAuthCallback(code: string): Promise<{ ok: bool
   } catch (err: any) {
     return { ok: false, error: err.message };
   }
+}
+
+async function getValidAccessToken(cfg: AgentAndGmailConfig): Promise<string | null> {
+  const gmail = cfg.gmail;
+  if (!gmail) return null;
+
+  const { clientId, clientSecret } = getOAuthClientParams(cfg);
+  const isExpired = gmail.expiryDate && Date.now() > gmail.expiryDate - 60000;
+
+  if (gmail.refreshToken && clientId && clientSecret && (!gmail.accessToken || isExpired)) {
+    try {
+      const res = await fetch('https://oauth2.googleapis.com/token', {
+        method: 'POST',
+        headers: { 'Content-Type': 'application/x-www-form-urlencoded' },
+        body: new URLSearchParams({
+          client_id: clientId,
+          client_secret: clientSecret,
+          refresh_token: gmail.refreshToken,
+          grant_type: 'refresh_token',
+        }).toString(),
+      });
+      const data: any = await res.json();
+      if (res.ok && data.access_token) {
+        const nextExpiry = data.expires_in ? Date.now() + Number(data.expires_in) * 1000 : undefined;
+        await saveConfig({
+          gmail: {
+            ...gmail,
+            accessToken: data.access_token,
+            expiryDate: nextExpiry,
+          },
+        });
+        return data.access_token;
+      }
+    } catch {
+      // fall through
+    }
+  }
+
+  return gmail.accessToken || null;
 }
 
 export async function fetchGmailMessages(limit = 12, query = 'in:inbox'): Promise<{
@@ -202,89 +243,30 @@ export async function fetchGmailMessages(limit = 12, query = 'in:inbox'): Promis
   const cfg = await loadConfig();
   const gmail = cfg.gmail;
 
-  // 1. OAuth2 with googleapis (Refresh Token + Access Token)
-  const effectiveClientId = gmail?.clientId || DEFAULT_OAUTH_CLIENT_ID;
-  const effectiveClientSecret = gmail?.clientSecret || DEFAULT_OAUTH_CLIENT_SECRET;
-  if (gmail?.refreshToken && effectiveClientId && effectiveClientSecret) {
-    try {
-      const oauth2Client = createOAuth2Client(cfg);
-      oauth2Client.setCredentials({
-        access_token: gmail.accessToken,
-        refresh_token: gmail.refreshToken,
-        expiry_date: gmail.expiryDate,
-      });
-
-      const gmailApi = google.gmail({ version: 'v1', auth: oauth2Client });
-      const [profileRes, listRes] = await Promise.all([
-        gmailApi.users.getProfile({ userId: 'me' }).catch(() => null),
-        gmailApi.users.messages.list({ userId: 'me', maxResults: limit, q: query }),
-      ]);
-
-      const detectedEmail = profileRes?.data?.emailAddress || gmail.email || 'Connected via OAuth2';
-      if (detectedEmail && detectedEmail !== gmail.email) {
-        await saveConfig({ gmail: { ...gmail, email: detectedEmail } });
-      }
-
-      const items = listRes.data.messages || [];
-      const details: EmailMessage[] = [];
-
-      for (const item of items.slice(0, limit)) {
-        if (!item.id) continue;
-        const msgRes = await gmailApi.users.messages.get({
-          userId: 'me',
-          id: item.id,
-          format: 'metadata',
-          metadataHeaders: ['Subject', 'From', 'Date'],
-        });
-        const msg = msgRes.data;
-        const headers = msg.payload?.headers || [];
-        const getHeader = (name: string) =>
-          headers.find((h) => h.name?.toLowerCase() === name.toLowerCase())?.value || '';
-        details.push({
-          id: msg.id || item.id,
-          from: getHeader('From'),
-          subject: getHeader('Subject') || '(No Subject)',
-          snippet: msg.snippet || '',
-          date: getHeader('Date') || new Date(Number(msg.internalDate || Date.now())).toISOString(),
-          unread: (msg.labelIds || []).includes('UNREAD'),
-        });
-      }
-
-      return {
-        connected: true,
-        mode: 'oauth2',
-        email: detectedEmail,
-        messages: details,
-      };
-    } catch (err: any) {
-      return {
-        connected: false,
-        mode: 'oauth2',
-        email: gmail.email || '',
-        messages: [],
-        error: `Google OAuth2 error: ${err.message}`,
-      };
-    }
-  }
-
-  // 2. Direct OAuth2 Access Token (without Client Secret)
-  if (gmail?.accessToken) {
+  // 1. OAuth2 Access / Refresh Token via Gmail REST API
+  const accessToken = await getValidAccessToken(cfg);
+  if (accessToken) {
     try {
       const profileRes = await fetch('https://gmail.googleapis.com/gmail/v1/users/me/profile', {
-        headers: { Authorization: `Bearer ${gmail.accessToken}` },
+        headers: { Authorization: `Bearer ${accessToken}` },
       });
-      let detectedEmail = gmail.email || 'Connected via OAuth2 Token';
-      if (profileRes.ok) {
-        const prof: any = await profileRes.json();
-        if (prof.emailAddress) detectedEmail = prof.emailAddress;
+      if (!profileRes.ok) {
+        const errJson: any = await profileRes.json().catch(() => ({}));
+        throw new Error(errJson?.error?.message || `Gmail API HTTP ${profileRes.status}`);
+      }
+      const prof: any = await profileRes.json();
+      const detectedEmail = prof.emailAddress || gmail?.email || 'Connected via OAuth2';
+      if (detectedEmail && detectedEmail !== gmail?.email) {
+        await saveConfig({ gmail: { ...gmail, email: detectedEmail } });
       }
 
       const listRes = await fetch(
         `https://gmail.googleapis.com/gmail/v1/users/me/messages?maxResults=${limit}&q=${encodeURIComponent(query)}`,
-        { headers: { Authorization: `Bearer ${gmail.accessToken}` } }
+        { headers: { Authorization: `Bearer ${accessToken}` } }
       );
       if (!listRes.ok) {
-        throw new Error(`Gmail API HTTP ${listRes.status} (Token may be expired — please sign in again)`);
+        const errJson: any = await listRes.json().catch(() => ({}));
+        throw new Error(errJson?.error?.message || `Gmail API HTTP ${listRes.status}`);
       }
       const listData: any = await listRes.json();
       const items = listData.messages || [];
@@ -293,7 +275,7 @@ export async function fetchGmailMessages(limit = 12, query = 'in:inbox'): Promis
       for (const item of items.slice(0, limit)) {
         const msgRes = await fetch(
           `https://gmail.googleapis.com/gmail/v1/users/me/messages/${item.id}?format=metadata&metadataHeaders=Subject&metadataHeaders=From&metadataHeaders=Date`,
-          { headers: { Authorization: `Bearer ${gmail.accessToken}` } }
+          { headers: { Authorization: `Bearer ${accessToken}` } }
         );
         if (msgRes.ok) {
           const msg: any = await msgRes.json();
@@ -320,14 +302,14 @@ export async function fetchGmailMessages(limit = 12, query = 'in:inbox'): Promis
       return {
         connected: false,
         mode: 'oauth2',
-        email: gmail.email || '',
+        email: gmail?.email || '',
         messages: [],
-        error: `Gmail OAuth2 Token error: ${err.message}`,
+        error: `Google OAuth2 error: ${err.message}`,
       };
     }
   }
 
-  // 3. Gmail IMAP with App Password
+  // 2. Gmail IMAP with App Password
   if (gmail?.email && gmail?.appPassword) {
     const client = new ImapFlow({
       host: 'imap.gmail.com',
@@ -388,7 +370,6 @@ export async function fetchGmailMessages(limit = 12, query = 'in:inbox'): Promis
     }
   }
 
-  // 4. Disconnected clean state (no demo/cached emails)
   return {
     connected: false,
     mode: 'disconnected',
@@ -397,9 +378,6 @@ export async function fetchGmailMessages(limit = 12, query = 'in:inbox'): Promis
   };
 }
 
-/**
- * Fetches unread Gmail messages from the last 3 days (`is:unread newer_than:3d`) for the Bell notification dropdown
- */
 export async function fetchUnreadGmail3Days(limit = 15): Promise<{
   connected: boolean;
   email: string;
@@ -409,7 +387,6 @@ export async function fetchUnreadGmail3Days(limit = 15): Promise<{
   error?: string;
 }> {
   const data = await fetchGmailMessages(limit, 'in:inbox is:unread newer_than:3d');
-  // If connected via IMAP, filter for unread & last 3 days
   const threeDaysAgo = Date.now() - 3 * 24 * 60 * 60 * 1000;
   const filtered =
     data.mode === 'imap'
@@ -444,41 +421,21 @@ export async function sendGmailMessage(to: string, subject: string, body: string
     .replace(/\//g, '_')
     .replace(/=+$/, '');
 
-  const effectiveClientId = gmail?.clientId || DEFAULT_OAUTH_CLIENT_ID;
-  const effectiveClientSecret = gmail?.clientSecret || DEFAULT_OAUTH_CLIENT_SECRET;
-  if (gmail?.refreshToken && effectiveClientId && effectiveClientSecret) {
-    try {
-      const oauth2Client = createOAuth2Client(cfg);
-      oauth2Client.setCredentials({
-        access_token: gmail.accessToken,
-        refresh_token: gmail.refreshToken,
-        expiry_date: gmail.expiryDate,
-      });
-      const gmailApi = google.gmail({ version: 'v1', auth: oauth2Client });
-      await gmailApi.users.messages.send({
-        userId: 'me',
-        requestBody: { raw: encoded },
-      });
-      return { ok: true, message: `Email sent via Google OAuth2 to ${to}` };
-    } catch (err: any) {
-      return { ok: false, message: `Google OAuth2 send failed: ${err.message}` };
-    }
-  }
-
-  if (gmail?.accessToken) {
+  const accessToken = await getValidAccessToken(cfg);
+  if (accessToken) {
     try {
       const res = await fetch('https://gmail.googleapis.com/gmail/v1/users/me/messages/send', {
         method: 'POST',
         headers: {
-          Authorization: `Bearer ${gmail.accessToken}`,
+          Authorization: `Bearer ${accessToken}`,
           'Content-Type': 'application/json',
         },
         body: JSON.stringify({ raw: encoded }),
       });
       if (!res.ok) throw new Error(`HTTP ${res.status}`);
-      return { ok: true, message: `Email sent via Gmail OAuth2 API to ${to}` };
+      return { ok: true, message: `Email sent via Google OAuth2 to ${to}` };
     } catch (err: any) {
-      return { ok: false, message: `Gmail API send failed: ${err.message}` };
+      return { ok: false, message: `Google OAuth2 send failed: ${err.message}` };
     }
   }
 

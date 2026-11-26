@@ -38,11 +38,9 @@
     "start": "node ./bin/cli.mjs"
   },
   "dependencies": {
-    "@google/genai": "latest",
     "cors": "^2.8.5",
     "dotenv": "^16.4.7",
     "express": "^4.21.2",
-    "googleapis": "^144.0.0",
     "imapflow": "^1.0.171",
     "nodemailer": "^6.10.0",
     "systeminformation": "^5.25.11",

@@ -10,6 +10,7 @@ export const translations = {
     wifiNetwork: 'Wi-Fi & Network',
     gmailFacebook: 'Gmail OAuth2',
     vpsManager: 'VPS & Remote SSH',
+    mediaStudio: 'Capture & Record Studio',
     applications: 'Applications',
     aiSuperAgent: 'AI Super Agent',
     chat: 'Chat',
@@ -37,6 +38,7 @@ export const translations = {
       network: 'Wi-Fi & Network Dashboard',
       social: 'Gmail OAuth 2.0 Integration',
       vps: 'Advanced VPS & Remote SSH Manager',
+      media: 'Screen Capture, Screen Recorder & Audio Studio',
     },
     // Overview Tab
     processorGraphics: 'Processor & Graphics',
@@ -182,6 +184,7 @@ export const translations = {
     wifiNetwork: 'Wi-Fi & Mạng',
     gmailFacebook: 'Gmail OAuth2',
     vpsManager: 'Quản lý VPS & SSH',
+    mediaStudio: 'Chụp & Quay Màn Hình / Thu Âm',
     applications: 'Ứng dụng máy tính',
     aiSuperAgent: 'Trợ lý AI Super Agent',
     chat: 'Trò chuyện',
@@ -209,6 +212,7 @@ export const translations = {
       network: 'Quản Lý Wi-Fi & Kết Nối Mạng',
       social: 'Tích Hợp Gmail OAuth 2.0',
       vps: 'Quản Lý Máy Chủ VPS & Remote SSH (Nâng Cao)',
+      media: 'Studio Chụp Màn Hình, Quay Video Màn Hình & Ghi Âm',
     },
     // Overview Tab
     processorGraphics: 'Vi xử lý & Đồ họa (CPU / GPU)',

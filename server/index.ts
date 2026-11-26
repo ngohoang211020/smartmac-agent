@@ -39,6 +39,13 @@ import {
   executeRemoteVpsCommand,
   listLocalSshKeys,
 } from './services/vps.js';
+import {
+  MEDIA_CAPTURES_DIR,
+  listCapturedMedia,
+  takeNativeOsScreenshot,
+  saveBase64MediaFile,
+  deleteMediaFile,
+} from './services/media.js';
 import { processAgentMessage } from './services/agent.js';
 import {
   strictLocalOriginGuard,
@@ -64,7 +71,8 @@ app.use(
     },
   })
 );
-app.use(express.json({ limit: '5mb' }));
+// ---express.json({ limit: '50mb' }) for video/audio recording uploads ---
+app.use(express.json({ limit: '50mb' }));
 app.use('/api', adminPinAuthGuard);
 
 // --- SECURITY & ADMIN PIN ROUTES ---
@@ -429,6 +437,50 @@ app.post('/api/vps/exec', async (req, res) => {
   const { server, command } = req.body;
   const result = await executeRemoteVpsCommand(server, command);
   res.json(result);
+});
+
+// --- SCREEN CAPTURE, SCREEN RECORDER & AUDIO RECORDER ROUTES ---
+app.get('/api/media/list', async (_req, res) => {
+  try {
+    const items = await listCapturedMedia();
+    res.json({ dir: MEDIA_CAPTURES_DIR, items });
+  } catch (err: any) {
+    res.status(500).json({ error: err.message });
+  }
+});
+
+app.post('/api/media/screenshot-os', async (req, res) => {
+  const { mode } = req.body;
+  const result = await takeNativeOsScreenshot(mode === 'interactive' ? 'interactive' : 'fullscreen');
+  res.json(result);
+});
+
+app.post('/api/media/save', async (req, res) => {
+  try {
+    const { filename, base64Data, type } = req.body;
+    const result = await saveBase64MediaFile(filename, base64Data, type || 'screenshot');
+    res.json(result);
+  } catch (err: any) {
+    res.status(400).json({ ok: false, message: err.message });
+  }
+});
+
+app.delete('/api/media/file/:name', async (req, res) => {
+  try {
+    const result = await deleteMediaFile(req.params.name);
+    res.json(result);
+  } catch (err: any) {
+    res.status(400).json({ ok: false, message: err.message });
+  }
+});
+
+app.get('/api/media/file/:name', (req, res) => {
+  const safeBase = path.basename(req.params.name);
+  const fullPath = path.join(MEDIA_CAPTURES_DIR, safeBase);
+  if (!fs.existsSync(fullPath)) {
+    return res.status(404).end();
+  }
+  res.sendFile(fullPath);
 });
 
 // --- AI AGENT CHAT ROUTE ---

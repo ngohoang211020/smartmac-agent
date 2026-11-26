@@ -44,6 +44,10 @@ import {
   Check,
   ShieldCheck,
   Lock,
+  Camera,
+  Video,
+  Mic,
+  Download,
 } from 'lucide-react';
 import { Lang, translations } from './i18n';
 
@@ -125,7 +129,7 @@ function formatUptime(seconds: number): string {
   return `${pad(h)}:${pad(m)}:${pad(s)}`;
 }
 
-type ActiveTab = 'overview' | 'apps' | 'files' | 'network' | 'social' | 'vps';
+type ActiveTab = 'overview' | 'apps' | 'files' | 'network' | 'social' | 'vps' | 'media';
 
 function openGmailMessageDirect(messageId: string) {
   if (!messageId || messageId.startsWith('demo-') || messageId.startsWith('cli-')) {
@@ -421,6 +425,12 @@ export default function App() {
                         active={activeTab === 'apps'}
                         onClick={() => setActiveTab('apps')}
                         label={t.appsProcesses}
+                      />
+                      <SubMenuItem
+                        active={activeTab === 'media'}
+                        onClick={() => setActiveTab('media')}
+                        label={t.mediaStudio}
+                        badge="REC"
                       />
                     </div>
                   )}
@@ -1065,6 +1075,7 @@ export default function App() {
             {activeTab === 'network' && <WifiAndNetworkTab t={t} snapshot={snapshot} onToast={showToast} />}
             {activeTab === 'social' && <SocialHubTab t={t} lang={lang} onToast={showToast} />}
             {activeTab === 'vps' && <VpsManagerTab t={t} lang={lang} onToast={showToast} />}
+            {activeTab === 'media' && <MediaStudioTab t={t} lang={lang} onToast={showToast} />}
           </main>
 
           {agentOpen && <AIAgentDrawer t={t} lang={lang} onClose={() => setAgentOpen(false)} onToast={showToast} />}
@@ -3624,7 +3635,646 @@ function VpsManagerTab({
 }
 
 /* ============================================================================
-   7. AI AGENT CHAT DRAWER
+   7. SCREEN CAPTURE, SCREEN RECORDER & AUDIO RECORDER STUDIO TAB
+============================================================================ */
+function MediaStudioTab({
+  lang,
+  onToast,
+}: {
+  t: typeof translations['en'];
+  lang: Lang;
+  onToast: (m: string, t?: 'ok' | 'err') => void;
+}) {
+  const isVi = lang === 'vi';
+  const [mediaDir, setMediaDir] = useState<string>('~/Desktop/SmartMac-Captures');
+  const [items, setItems] = useState<any[]>([]);
+  const [capturingOs, setCapturingOs] = useState(false);
+
+  // Screen Recording State
+  const [screenRecActive, setScreenRecActive] = useState(false);
+  const [screenWithMic, setScreenWithMic] = useState(true);
+  const [screenSeconds, setScreenSeconds] = useState(0);
+  const screenRecorderRef = useRef<MediaRecorder | null>(null);
+  const screenStreamRef = useRef<MediaStream | null>(null);
+  const screenVideoPreviewRef = useRef<HTMLVideoElement | null>(null);
+  const screenTimerRef = useRef<any>(null);
+
+  // Audio Recording State
+  const [audioRecActive, setAudioRecActive] = useState(false);
+  const [audioSeconds, setAudioSeconds] = useState(0);
+  const audioRecorderRef = useRef<MediaRecorder | null>(null);
+  const audioStreamRef = useRef<MediaStream | null>(null);
+  const audioTimerRef = useRef<any>(null);
+
+  const loadMediaList = async () => {
+    try {
+      const res = await fetch('/api/media/list');
+      const data = await res.json();
+      if (data.dir) setMediaDir(data.dir);
+      setItems(data.items || []);
+    } catch {
+      // ignore
+    }
+  };
+
+  useEffect(() => {
+    loadMediaList();
+    return () => {
+      if (screenTimerRef.current) clearInterval(screenTimerRef.current);
+      if (audioTimerRef.current) clearInterval(audioTimerRef.current);
+      screenStreamRef.current?.getTracks().forEach((tr) => tr.stop());
+      audioStreamRef.current?.getTracks().forEach((tr) => tr.stop());
+    };
+  }, []);
+
+  const formatTimer = (sec: number) => {
+    const m = Math.floor(sec / 60);
+    const s = sec % 60;
+    return `${String(m).padStart(2, '0')}:${String(s).padStart(2, '0')}`;
+  };
+
+  const blobToBase64 = (blob: Blob): Promise<string> =>
+    new Promise((resolve, reject) => {
+      const reader = new FileReader();
+      reader.onloadend = () => resolve(String(reader.result || ''));
+      reader.onerror = reject;
+      reader.readAsDataURL(blob);
+    });
+
+  // 1A. OS Native Fullscreen / Interactive Screenshot
+  const handleNativeOsScreenshot = async (mode: 'fullscreen' | 'interactive') => {
+    setCapturingOs(true);
+    try {
+      const res = await fetch('/api/media/screenshot-os', {
+        method: 'POST',
+        headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify({ mode }),
+      });
+      const data = await res.json();
+      onToast(data.message, data.ok ? 'ok' : 'err');
+      if (data.ok) loadMediaList();
+    } finally {
+      setCapturingOs(false);
+    }
+  };
+
+  // 1B. Browser Picker Screen/Window/Tab Snapshot (works across all OSes without OS permissions)
+  const handleBrowserSnapshot = async () => {
+    try {
+      const stream = await navigator.mediaDevices.getDisplayMedia({
+        video: { frameRate: 30 },
+        audio: false,
+      });
+      const track = stream.getVideoTracks()[0];
+      const video = document.createElement('video');
+      video.srcObject = stream;
+      video.muted = true;
+      await video.play();
+
+      const canvas = document.createElement('canvas');
+      canvas.width = video.videoWidth || 1920;
+      canvas.height = video.videoHeight || 1080;
+      const ctx = canvas.getContext('2d');
+      ctx?.drawImage(video, 0, 0, canvas.width, canvas.height);
+
+      track.stop();
+      stream.getTracks().forEach((t) => t.stop());
+
+      const base64Data = canvas.toDataURL('image/png');
+      const filename = `ScreenCapture_${new Date().toISOString().replace(/[:.]/g, '-')}.png`;
+      const res = await fetch('/api/media/save', {
+        method: 'POST',
+        headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify({ filename, base64Data, type: 'screenshot' }),
+      });
+      const data = await res.json();
+      onToast(data.message, data.ok ? 'ok' : 'err');
+      loadMediaList();
+    } catch (err: any) {
+      onToast(err.message || 'Screen capture cancelled', 'err');
+    }
+  };
+
+  // 2. Start / Stop Screen Video Recording
+  const handleStartScreenRecording = async () => {
+    try {
+      const displayStream = await navigator.mediaDevices.getDisplayMedia({
+        video: { frameRate: 30 },
+        audio: true,
+      });
+
+      let combinedStream = displayStream;
+      if (screenWithMic) {
+        try {
+          const micStream = await navigator.mediaDevices.getUserMedia({ audio: true, video: false });
+          combinedStream = new MediaStream([
+            ...displayStream.getVideoTracks(),
+            ...displayStream.getAudioTracks(),
+            ...micStream.getAudioTracks(),
+          ]);
+        } catch {
+          // Proceed with display stream only if mic permission declined
+        }
+      }
+
+      screenStreamRef.current = combinedStream;
+      if (screenVideoPreviewRef.current) {
+        screenVideoPreviewRef.current.srcObject = displayStream;
+        screenVideoPreviewRef.current.play().catch(() => {});
+      }
+
+      const chunks: BlobPart[] = [];
+      const mimeType = MediaRecorder.isTypeSupported('video/webm;codecs=vp9,opus')
+        ? 'video/webm;codecs=vp9,opus'
+        : 'video/webm';
+      const recorder = new MediaRecorder(combinedStream, { mimeType });
+
+      recorder.ondataavailable = (e) => {
+        if (e.data && e.data.size > 0) chunks.push(e.data);
+      };
+
+      recorder.onstop = async () => {
+        if (screenTimerRef.current) clearInterval(screenTimerRef.current);
+        setScreenRecActive(false);
+        setScreenSeconds(0);
+        combinedStream.getTracks().forEach((t) => t.stop());
+        if (screenVideoPreviewRef.current) {
+          screenVideoPreviewRef.current.srcObject = null;
+        }
+
+        if (chunks.length === 0) return;
+        const blob = new Blob(chunks, { type: 'video/webm' });
+        const base64Data = await blobToBase64(blob);
+        const filename = `ScreenRecord_${new Date().toISOString().replace(/[:.]/g, '-')}.webm`;
+
+        onToast(isVi ? 'Đang lưu video quay màn hình...' : 'Saving screen recording...');
+        const res = await fetch('/api/media/save', {
+          method: 'POST',
+          headers: { 'Content-Type': 'application/json' },
+          body: JSON.stringify({ filename, base64Data, type: 'video' }),
+        });
+        const data = await res.json();
+        onToast(data.message, data.ok ? 'ok' : 'err');
+        loadMediaList();
+      };
+
+      // Also stop if user clicks native browser "Stop sharing" button
+      displayStream.getVideoTracks()[0].onended = () => {
+        if (recorder.state !== 'inactive') recorder.stop();
+      };
+
+      screenRecorderRef.current = recorder;
+      recorder.start(1000);
+      setScreenRecActive(true);
+      setScreenSeconds(0);
+      screenTimerRef.current = setInterval(() => {
+        setScreenSeconds((s) => s + 1);
+      }, 1000);
+    } catch (err: any) {
+      onToast(err.message || 'Screen recording cancelled', 'err');
+    }
+  };
+
+  const handleStopScreenRecording = () => {
+    if (screenRecorderRef.current && screenRecorderRef.current.state !== 'inactive') {
+      screenRecorderRef.current.stop();
+    }
+  };
+
+  // 3. Start / Stop Microphone Audio Recording
+  const handleStartAudioRecording = async () => {
+    try {
+      const stream = await navigator.mediaDevices.getUserMedia({ audio: true, video: false });
+      audioStreamRef.current = stream;
+
+      const chunks: BlobPart[] = [];
+      const mimeType = MediaRecorder.isTypeSupported('audio/webm;codecs=opus')
+        ? 'audio/webm;codecs=opus'
+        : 'audio/webm';
+      const recorder = new MediaRecorder(stream, { mimeType });
+
+      recorder.ondataavailable = (e) => {
+        if (e.data && e.data.size > 0) chunks.push(e.data);
+      };
+
+      recorder.onstop = async () => {
+        if (audioTimerRef.current) clearInterval(audioTimerRef.current);
+        setAudioRecActive(false);
+        setAudioSeconds(0);
+        stream.getTracks().forEach((t) => t.stop());
+
+        if (chunks.length === 0) return;
+        const blob = new Blob(chunks, { type: 'audio/webm' });
+        const base64Data = await blobToBase64(blob);
+        const filename = `AudioRecord_${new Date().toISOString().replace(/[:.]/g, '-')}.webm`;
+
+        const res = await fetch('/api/media/save', {
+          method: 'POST',
+          headers: { 'Content-Type': 'application/json' },
+          body: JSON.stringify({ filename, base64Data, type: 'audio' }),
+        });
+        const data = await res.json();
+        onToast(data.message, data.ok ? 'ok' : 'err');
+        loadMediaList();
+      };
+
+      audioRecorderRef.current = recorder;
+      recorder.start(500);
+      setAudioRecActive(true);
+      setAudioSeconds(0);
+      audioTimerRef.current = setInterval(() => {
+        setAudioSeconds((s) => s + 1);
+      }, 1000);
+    } catch (err: any) {
+      onToast(err.message || 'Microphone access denied', 'err');
+    }
+  };
+
+  const handleStopAudioRecording = () => {
+    if (audioRecorderRef.current && audioRecorderRef.current.state !== 'inactive') {
+      audioRecorderRef.current.stop();
+    }
+  };
+
+  const handleDeleteMedia = async (name: string) => {
+    const res = await fetch(`/api/media/file/${encodeURIComponent(name)}`, { method: 'DELETE' });
+    const data = await res.json();
+    onToast(data.message, data.ok ? 'ok' : 'err');
+    loadMediaList();
+  };
+
+  const handleRevealFolder = async (filePath?: string) => {
+    await fetch('/api/files/reveal', {
+      method: 'POST',
+      headers: { 'Content-Type': 'application/json' },
+      body: JSON.stringify({ path: filePath || mediaDir }),
+    });
+    onToast(isVi ? 'Đã mở thư mục trong Finder / Explorer' : 'Revealed in Finder / Explorer');
+  };
+
+  return (
+    <div className="space-y-5">
+      {/* Top Studio Header */}
+      <div className="bg-white p-4 rounded-xl border border-slate-200 shadow-2xs flex flex-wrap items-center justify-between gap-3">
+        <div>
+          <div className="flex items-center gap-2">
+            <h3 className="text-sm font-bold text-slate-900">
+              {isVi
+                ? 'Studio Chụp Màn Hình, Quay Video Màn Hình & Ghi Âm'
+                : 'Screen Capture, Screen Recorder & Audio Studio'}
+            </h3>
+            <span className="text-[10px] font-bold px-2 py-0.5 rounded-full bg-rose-50 text-rose-600 border border-rose-200">
+              MEDIA STUDIO
+            </span>
+          </div>
+          <p className="text-xs text-slate-500 mt-0.5 font-mono">
+            {isVi ? 'Thư mục lưu tự động:' : 'Auto-saved to:'} {mediaDir}
+          </p>
+        </div>
+
+        <button
+          onClick={() => handleRevealFolder()}
+          className="flex items-center gap-1.5 px-3.5 py-2 rounded-lg bg-slate-100 hover:bg-slate-200 text-slate-700 text-xs font-semibold cursor-pointer"
+        >
+          <FolderOpen className="w-3.5 h-3.5 text-[#F26522]" />
+          <span>{isVi ? 'Mở Thư Mục Lưu File' : 'Open Captures Folder'}</span>
+        </button>
+      </div>
+
+      {/* 3 Studio Control Cards: 1. Capture Screen | 2. Record Screen Video | 3. Record Audio */}
+      <div className="grid grid-cols-1 lg:grid-cols-3 gap-5">
+        {/* CARD 1: CAPTURE SCREEN (SCREENSHOT) */}
+        <div className="bg-white rounded-xl border border-slate-200 shadow-2xs p-5 flex flex-col justify-between space-y-4">
+          <div className="space-y-2">
+            <div className="flex items-center justify-between">
+              <div className="flex items-center gap-2.5">
+                <div className="p-2.5 rounded-xl bg-orange-50 text-[#F26522]">
+                  <Camera className="w-5 h-5" />
+                </div>
+                <div>
+                  <h4 className="text-sm font-bold text-slate-900">
+                    {isVi ? '1. Chụp Màn Hình (Capture Screen)' : '1. Capture Screen (Screenshot)'}
+                  </h4>
+                  <p className="text-[11px] text-slate-400">
+                    {isVi ? 'Chụp toàn màn hình hoặc chọn cửa sổ' : 'Instant OS fullscreen or window picker'}
+                  </p>
+                </div>
+              </div>
+            </div>
+
+            <p className="text-xs text-slate-500 pt-1">
+              {isVi
+                ? 'Hỗ trợ chụp trực tiếp qua lệnh gốc của Hệ điều hành (macOS screencapture / Windows) hoặc chọn cửa sổ cụ thể.'
+                : 'Capture your entire desktop immediately via native OS utility or pick a specific window/tab.'}
+            </p>
+          </div>
+
+          <div className="space-y-2">
+            <button
+              onClick={() => handleNativeOsScreenshot('fullscreen')}
+              disabled={capturingOs}
+              className="w-full py-2.5 px-4 rounded-xl bg-[#F26522] hover:bg-orange-600 text-white text-xs font-bold flex items-center justify-center gap-2 transition cursor-pointer disabled:opacity-50"
+            >
+              <Camera className="w-4 h-4" />
+              <span>
+                {capturingOs
+                  ? isVi
+                    ? 'Đang chụp...'
+                    : 'Capturing...'
+                  : isVi
+                  ? 'Chụp Toàn Màn Hình Ngay (OS)'
+                  : 'Instant Fullscreen Capture (OS)'}
+              </span>
+            </button>
+
+            <div className="grid grid-cols-2 gap-2">
+              <button
+                onClick={() => handleNativeOsScreenshot('interactive')}
+                disabled={capturingOs}
+                className="py-2 px-3 rounded-lg bg-slate-100 hover:bg-slate-200 text-slate-700 text-xs font-semibold transition cursor-pointer"
+              >
+                {isVi ? 'Chọn Vùng (OS)' : 'Select Area (OS)'}
+              </button>
+              <button
+                onClick={handleBrowserSnapshot}
+                className="py-2 px-3 rounded-lg bg-slate-100 hover:bg-slate-200 text-slate-700 text-xs font-semibold transition cursor-pointer"
+              >
+                {isVi ? 'Chọn Cửa Sổ / Tab' : 'Pick Window / Tab'}
+              </button>
+            </div>
+          </div>
+        </div>
+
+        {/* CARD 2: RECORD SCREEN VIDEO */}
+        <div className="bg-white rounded-xl border border-slate-200 shadow-2xs p-5 flex flex-col justify-between space-y-4">
+          <div className="space-y-2">
+            <div className="flex items-center justify-between">
+              <div className="flex items-center gap-2.5">
+                <div className={`p-2.5 rounded-xl ${screenRecActive ? 'bg-rose-100 text-rose-600 animate-pulse' : 'bg-blue-50 text-blue-600'}`}>
+                  <Video className="w-5 h-5" />
+                </div>
+                <div>
+                  <h4 className="text-sm font-bold text-slate-900">
+                    {isVi ? '2. Quay Video Màn Hình (Record Screen)' : '2. Record Screen Video'}
+                  </h4>
+                  <p className="text-[11px] text-slate-400">
+                    {screenRecActive
+                      ? `🔴 REC ${formatTimer(screenSeconds)}`
+                      : isVi
+                      ? 'Quay màn hình 30fps kèm âm thanh'
+                      : '30fps HD video + system/mic audio'}
+                  </p>
+                </div>
+              </div>
+              {screenRecActive && (
+                <span className="px-2 py-0.5 rounded-full bg-rose-600 text-white text-[10px] font-bold animate-pulse">
+                  {formatTimer(screenSeconds)}
+                </span>
+              )}
+            </div>
+
+            {/* Live Mini Video Preview while recording */}
+            <div className="relative h-24 rounded-lg bg-slate-950 overflow-hidden flex items-center justify-center border border-slate-200">
+              <video
+                ref={screenVideoPreviewRef}
+                muted
+                playsInline
+                className={`w-full h-full object-contain ${screenRecActive ? 'block' : 'hidden'}`}
+              />
+              {!screenRecActive && (
+                <span className="text-[11px] text-slate-400">
+                  {isVi ? 'Khung xem trước trực tiếp khi quay' : 'Live screen preview appears here'}
+                </span>
+              )}
+            </div>
+          </div>
+
+          <div className="space-y-2">
+            <label className="flex items-center gap-2 text-xs text-slate-600 cursor-pointer">
+              <input
+                type="checkbox"
+                checked={screenWithMic}
+                onChange={(e) => setScreenWithMic(e.target.checked)}
+                disabled={screenRecActive}
+                className="rounded text-[#F26522]"
+              />
+              <span>{isVi ? 'Thu kèm giọng nói Microphone' : 'Include Microphone voice audio'}</span>
+            </label>
+
+            {!screenRecActive ? (
+              <button
+                onClick={handleStartScreenRecording}
+                className="w-full py-2.5 px-4 rounded-xl bg-[#1B2537] hover:bg-slate-800 text-white text-xs font-bold flex items-center justify-center gap-2 transition cursor-pointer"
+              >
+                <Video className="w-4 h-4 text-[#F26522]" />
+                <span>{isVi ? 'Bắt Đầu Quay Màn Hình' : 'Start Screen Recording'}</span>
+              </button>
+            ) : (
+              <button
+                onClick={handleStopScreenRecording}
+                className="w-full py-2.5 px-4 rounded-xl bg-rose-600 hover:bg-rose-500 text-white text-xs font-bold flex items-center justify-center gap-2 transition cursor-pointer"
+              >
+                <Square className="w-4 h-4" />
+                <span>
+                  {isVi ? `Dừng & Lưu Video (${formatTimer(screenSeconds)})` : `Stop & Save Video (${formatTimer(screenSeconds)})`}
+                </span>
+              </button>
+            )}
+          </div>
+        </div>
+
+        {/* CARD 3: RECORD AUDIO (VOICE / MICROPHONE) */}
+        <div className="bg-white rounded-xl border border-slate-200 shadow-2xs p-5 flex flex-col justify-between space-y-4">
+          <div className="space-y-3">
+            <div className="flex items-center justify-between">
+              <div className="flex items-center gap-2.5">
+                <div className={`p-2.5 rounded-xl ${audioRecActive ? 'bg-rose-100 text-rose-600 animate-pulse' : 'bg-emerald-50 text-emerald-600'}`}>
+                  <Mic className="w-5 h-5" />
+                </div>
+                <div>
+                  <h4 className="text-sm font-bold text-slate-900">
+                    {isVi ? '3. Ghi Âm Giọng Nói (Record Audio)' : '3. Record Audio (Voice / Mic)'}
+                  </h4>
+                  <p className="text-[11px] text-slate-400">
+                    {audioRecActive
+                      ? `🔴 REC ${formatTimer(audioSeconds)}`
+                      : isVi
+                      ? 'Ghi âm chất lượng cao từ Microphone'
+                      : 'High-clarity Opus audio recording'}
+                  </p>
+                </div>
+              </div>
+              {audioRecActive && (
+                <span className="px-2 py-0.5 rounded-full bg-rose-600 text-white text-[10px] font-bold animate-pulse">
+                  {formatTimer(audioSeconds)}
+                </span>
+              )}
+            </div>
+
+            {/* Audio Waveform Visualizer */}
+            <div className="h-24 rounded-lg bg-slate-50 border border-slate-200 flex flex-col items-center justify-center p-3">
+              {audioRecActive ? (
+                <div className="space-y-2 text-center">
+                  <div className="flex items-center justify-center gap-1 h-8">
+                    {[40, 85, 55, 95, 65, 90, 50, 80, 60, 95, 45, 75].map((h, i) => (
+                      <span
+                        key={i}
+                        className="w-1.5 rounded-full bg-[#F26522] animate-pulse"
+                        style={{ height: `${h}%`, animationDelay: `${i * 90}ms` }}
+                      />
+                    ))}
+                  </div>
+                  <div className="text-xs font-extrabold text-rose-600">
+                    {isVi ? 'Đang thu âm Microphone...' : 'Recording Microphone...'} ({formatTimer(audioSeconds)})
+                  </div>
+                </div>
+              ) : (
+                <div className="text-center text-[11px] text-slate-400">
+                  {isVi
+                    ? 'Nhấn "Bắt Đầu Ghi Âm" để thu giọng nói hoặc cuộc họp và tự động lưu vào máy.'
+                    : 'Click "Start Audio Recording" to record voice notes or meetings directly to disk.'}
+                </div>
+              )}
+            </div>
+          </div>
+
+          <div>
+            {!audioRecActive ? (
+              <button
+                onClick={handleStartAudioRecording}
+                className="w-full py-2.5 px-4 rounded-xl bg-emerald-600 hover:bg-emerald-500 text-white text-xs font-bold flex items-center justify-center gap-2 transition cursor-pointer"
+              >
+                <Mic className="w-4 h-4" />
+                <span>{isVi ? 'Bắt Đầu Ghi Âm' : 'Start Audio Recording'}</span>
+              </button>
+            ) : (
+              <button
+                onClick={handleStopAudioRecording}
+                className="w-full py-2.5 px-4 rounded-xl bg-rose-600 hover:bg-rose-500 text-white text-xs font-bold flex items-center justify-center gap-2 transition cursor-pointer"
+              >
+                <Square className="w-4 h-4" />
+                <span>
+                  {isVi ? `Dừng & Lưu File Ghi Âm (${formatTimer(audioSeconds)})` : `Stop & Save Audio (${formatTimer(audioSeconds)})`}
+                </span>
+              </button>
+            )}
+          </div>
+        </div>
+      </div>
+
+      {/* Captured Media Gallery (Screenshots, Screen Recordings, Audio Clips) */}
+      <div className="bg-white rounded-xl border border-slate-200 shadow-2xs p-5 space-y-4">
+        <div className="flex items-center justify-between">
+          <div>
+            <h4 className="text-sm font-bold text-slate-900">
+              {isVi ? `Thư Viện Đã Chụp & Ghi (${items.length})` : `Captured Media Library (${items.length})`}
+            </h4>
+            <p className="text-xs text-slate-400">
+              {isVi
+                ? 'Xem trực tiếp ảnh chụp màn hình, phát lại video quay màn hình hoặc nghe lại file ghi âm'
+                : 'Preview screenshots, play back screen recordings, or listen to recorded audio clips'}
+            </p>
+          </div>
+          <button
+            onClick={loadMediaList}
+            className="p-2 rounded-lg bg-slate-100 hover:bg-slate-200 text-slate-600 cursor-pointer"
+            title="Refresh"
+          >
+            <RefreshCw className="w-4 h-4" />
+          </button>
+        </div>
+
+        {items.length === 0 ? (
+          <div className="py-12 text-center text-xs text-slate-400 border border-dashed border-slate-200 rounded-xl">
+            {isVi
+              ? 'Chưa có ảnh chụp, video hoặc bản ghi âm nào. Hãy dùng 3 công cụ phía trên để bắt đầu!'
+              : 'No screenshots, screen recordings, or audio clips yet. Use the 3 studio cards above to capture!'}
+          </div>
+        ) : (
+          <div className="grid grid-cols-1 sm:grid-cols-2 lg:grid-cols-3 gap-4">
+            {items.map((item) => (
+              <div
+                key={item.name}
+                className="rounded-xl border border-slate-200 bg-slate-50/70 overflow-hidden flex flex-col justify-between"
+              >
+                <div>
+                  {/* Media Player / Image Thumbnail */}
+                  <div className="h-44 bg-slate-900 flex items-center justify-center overflow-hidden relative">
+                    {item.type === 'screenshot' && (
+                      <a href={item.url} target="_blank" rel="noreferrer" className="w-full h-full block">
+                        <img src={item.url} alt={item.name} className="w-full h-full object-cover hover:scale-105 transition" />
+                      </a>
+                    )}
+                    {item.type === 'video' && (
+                      <video src={item.url} controls className="w-full h-full object-contain" />
+                    )}
+                    {item.type === 'audio' && (
+                      <div className="w-full p-4 flex flex-col items-center justify-center gap-3">
+                        <Mic className="w-8 h-8 text-emerald-400" />
+                        <audio src={item.url} controls className="w-full" />
+                      </div>
+                    )}
+                    <span className="absolute top-2 left-2 text-[10px] font-bold uppercase px-2 py-0.5 rounded bg-black/70 text-white">
+                      {item.type}
+                    </span>
+                  </div>
+
+                  {/* Metadata */}
+                  <div className="p-3">
+                    <div className="text-xs font-bold text-slate-900 truncate" title={item.name}>
+                      {item.name}
+                    </div>
+                    <div className="flex items-center justify-between text-[11px] text-slate-400 mt-1">
+                      <span>{formatBytes(item.size)}</span>
+                      <span>
+                        {new Date(item.createdAt).toLocaleString([], {
+                          month: 'short',
+                          day: 'numeric',
+                          hour: '2-digit',
+                          minute: '2-digit',
+                        })}
+                      </span>
+                    </div>
+                  </div>
+                </div>
+
+                {/* Actions */}
+                <div className="px-3 py-2 bg-white border-t border-slate-200/80 flex items-center justify-between gap-2">
+                  <div className="flex items-center gap-1.5">
+                    <a
+                      href={item.url}
+                      download={item.name}
+                      className="px-2.5 py-1 rounded-md bg-slate-100 hover:bg-slate-200 text-slate-700 text-[11px] font-semibold flex items-center gap-1"
+                    >
+                      <Download className="w-3 h-3" />
+                      <span>{isVi ? 'Tải về' : 'Download'}</span>
+                    </a>
+                    <button
+                      onClick={() => handleRevealFolder(item.path)}
+                      className="px-2.5 py-1 rounded-md bg-slate-100 hover:bg-slate-200 text-slate-700 text-[11px] font-semibold cursor-pointer"
+                    >
+                      Finder
+                    </button>
+                  </div>
+                  <button
+                    onClick={() => handleDeleteMedia(item.name)}
+                    className="p-1.5 rounded-md text-rose-500 hover:bg-rose-50 cursor-pointer"
+                    title="Delete"
+                  >
+                    <Trash2 className="w-3.5 h-3.5" />
+                  </button>
+                </div>
+              </div>
+            ))}
+          </div>
+        )}
+      </div>
+    </div>
+  );
+}
+
+/* ============================================================================
+   8. AI AGENT CHAT DRAWER
 ============================================================================ */
 function AIAgentDrawer({
   t,

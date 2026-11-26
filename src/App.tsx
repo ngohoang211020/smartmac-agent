@@ -1070,7 +1070,7 @@ export default function App() {
                 onToast={showToast}
               />
             )}
-            {activeTab === 'apps' && <AppsAndProcessesTab t={t} onToast={showToast} />}
+            {activeTab === 'apps' && <AppsAndProcessesTab t={t} lang={lang} onToast={showToast} />}
             {activeTab === 'files' && <FileExplorerTab t={t} onToast={showToast} />}
             {activeTab === 'network' && <WifiAndNetworkTab t={t} snapshot={snapshot} onToast={showToast} />}
             {activeTab === 'social' && <SocialHubTab t={t} lang={lang} onToast={showToast} />}
@@ -1874,17 +1874,25 @@ function KpiCard({
 ============================================================================ */
 function AppsAndProcessesTab({
   t,
+  lang,
   onToast,
 }: {
   t: typeof translations['en'];
+  lang: Lang;
   onToast: (m: string, t?: 'ok' | 'err') => void;
 }) {
+  const isVi = lang === 'vi';
   const [processes, setProcesses] = useState<any[]>([]);
   const [procStats, setProcStats] = useState({ all: 0, running: 0, sleeping: 0 });
   const [apps, setApps] = useState<Array<{ name: string; path: string; isSystem: boolean }>>([]);
   const [search, setSearch] = useState('');
   const [subTab, setSubTab] = useState<'processes' | 'installed'>('processes');
   const [loading, setLoading] = useState(false);
+
+  // Uninstall Modal State
+  const [uninstallTarget, setUninstallTarget] = useState<{ name: string; path: string; isSystem: boolean } | null>(null);
+  const [cleanLeftovers, setCleanLeftovers] = useState(true);
+  const [uninstalling, setUninstalling] = useState(false);
 
   const loadProcesses = async () => {
     setLoading(true);
@@ -1946,6 +1954,32 @@ function AppsAndProcessesTab({
     });
     const data = await res.json();
     onToast(data.message, data.ok ? 'ok' : 'err');
+  };
+
+  const handleConfirmUninstall = async () => {
+    if (!uninstallTarget) return;
+    setUninstalling(true);
+    try {
+      const res = await fetch('/api/apps/uninstall', {
+        method: 'POST',
+        headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify({
+          appPath: uninstallTarget.path,
+          appName: uninstallTarget.name,
+          cleanLeftovers,
+        }),
+      });
+      const data = await res.json();
+      onToast(data.message, data.ok ? 'ok' : 'err');
+      if (data.ok) {
+        setUninstallTarget(null);
+        loadApps();
+      }
+    } catch (err: any) {
+      onToast(err.message, 'err');
+    } finally {
+      setUninstalling(false);
+    }
   };
 
   const filteredProcs = processes.filter(
@@ -2071,7 +2105,14 @@ function AppsAndProcessesTab({
               <div className="flex items-center gap-3 min-w-0 pr-2">
                 <AppProcessIcon name={app.name} appPath={app.path} size="md" />
                 <div className="truncate">
-                  <div className="font-bold text-sm text-slate-900 truncate">{app.name}</div>
+                  <div className="flex items-center gap-1.5">
+                    <span className="font-bold text-sm text-slate-900 truncate">{app.name}</span>
+                    {app.isSystem && (
+                      <span className="text-[9px] font-bold px-1.5 py-0.5 rounded bg-slate-100 text-slate-500 shrink-0">
+                        OS
+                      </span>
+                    )}
+                  </div>
                   <div className="text-[11px] text-slate-400 truncate">{app.path}</div>
                 </div>
               </div>
@@ -2085,14 +2126,115 @@ function AppsAndProcessesTab({
                 </button>
                 <button
                   onClick={() => handleQuitApp(app.name)}
-                  className="p-2 rounded-lg bg-slate-100 hover:bg-rose-50 text-slate-600 hover:text-rose-600 border border-slate-200 transition cursor-pointer"
+                  className="p-2 rounded-lg bg-slate-100 hover:bg-amber-50 text-slate-600 hover:text-amber-600 border border-slate-200 transition cursor-pointer"
                   title={t.quitApp}
                 >
                   <Square className="w-3.5 h-3.5" />
                 </button>
+                {!app.isSystem && !app.path.startsWith('/System/') && (
+                  <button
+                    onClick={() => setUninstallTarget(app)}
+                    className="p-2 rounded-lg bg-rose-50 hover:bg-rose-100 text-rose-600 border border-rose-200 transition cursor-pointer"
+                    title={isVi ? 'Gỡ cài đặt / Xóa ứng dụng' : 'Uninstall / Remove Application'}
+                  >
+                    <Trash2 className="w-3.5 h-3.5" />
+                  </button>
+                )}
               </div>
             </div>
           ))}
+        </div>
+      )}
+
+      {/* Uninstall Confirmation & Leftover Cache Cleaner Modal */}
+      {uninstallTarget && (
+        <div className="fixed inset-0 z-50 bg-slate-900/50 backdrop-blur-xs flex items-center justify-center p-4">
+          <div className="bg-white rounded-2xl border border-slate-200 shadow-2xl max-w-md w-full overflow-hidden">
+            <div className="bg-[#1B2537] text-white p-4 flex items-center justify-between">
+              <div className="flex items-center gap-2.5">
+                <div className="p-2 rounded-lg bg-rose-500/20 text-rose-400">
+                  <Trash2 className="w-4 h-4" />
+                </div>
+                <div>
+                  <h3 className="text-sm font-bold">
+                    {isVi ? 'Gỡ Cài Đặt / Xóa Ứng Dụng' : 'Uninstall Application'}
+                  </h3>
+                  <p className="text-[11px] text-slate-300 truncate max-w-[260px]">
+                    {uninstallTarget.path}
+                  </p>
+                </div>
+              </div>
+              <button
+                onClick={() => setUninstallTarget(null)}
+                className="text-slate-300 hover:text-white p-1"
+              >
+                <X className="w-4 h-4" />
+              </button>
+            </div>
+
+            <div className="p-5 space-y-4 text-xs">
+              <div className="flex items-center gap-3 p-3 rounded-xl bg-slate-50 border border-slate-200">
+                <AppProcessIcon name={uninstallTarget.name} appPath={uninstallTarget.path} size="md" />
+                <div className="min-w-0">
+                  <div className="text-sm font-bold text-slate-900 truncate">{uninstallTarget.name}</div>
+                  <div className="text-[11px] text-slate-500 truncate">{uninstallTarget.path}</div>
+                </div>
+              </div>
+
+              <p className="text-slate-600 leading-relaxed">
+                {isVi
+                  ? `Ứng dụng "${uninstallTarget.name}" sẽ được đóng lại và chuyển vào Thùng rác (Trash) của hệ thống để bạn có thể khôi phục nếu cần.`
+                  : `"${uninstallTarget.name}" will be closed and moved to your system Trash so you can restore it if needed.`}
+              </p>
+
+              <label className="flex items-start gap-2.5 p-3 rounded-xl bg-orange-50/60 border border-orange-200 cursor-pointer">
+                <input
+                  type="checkbox"
+                  checked={cleanLeftovers}
+                  onChange={(e) => setCleanLeftovers(e.target.checked)}
+                  className="mt-0.5 rounded text-[#F26522]"
+                />
+                <div>
+                  <div className="font-bold text-slate-800">
+                    {isVi
+                      ? 'Dọn sạch cả dữ liệu thừa & bộ nhớ đệm (~/Library)'
+                      : 'Also clean leftover caches & support files (~/Library)'}
+                  </div>
+                  <div className="text-[11px] text-slate-500 mt-0.5">
+                    ~/Library/Application Support/{uninstallTarget.name}, ~/Library/Caches/{uninstallTarget.name}
+                  </div>
+                </div>
+              </label>
+
+              <div className="flex justify-end gap-2 pt-2">
+                <button
+                  type="button"
+                  onClick={() => setUninstallTarget(null)}
+                  disabled={uninstalling}
+                  className="px-4 py-2 rounded-lg bg-slate-100 text-slate-600 font-semibold cursor-pointer"
+                >
+                  {isVi ? 'Hủy' : 'Cancel'}
+                </button>
+                <button
+                  type="button"
+                  onClick={handleConfirmUninstall}
+                  disabled={uninstalling}
+                  className="px-4 py-2 rounded-lg bg-rose-600 hover:bg-rose-500 text-white font-bold flex items-center gap-1.5 cursor-pointer disabled:opacity-50"
+                >
+                  <Trash2 className="w-3.5 h-3.5" />
+                  <span>
+                    {uninstalling
+                      ? isVi
+                        ? 'Đang gỡ...'
+                        : 'Uninstalling...'
+                      : isVi
+                      ? 'Xác nhận Gỡ Ứng Dụng'
+                      : 'Confirm Uninstall'}
+                  </span>
+                </button>
+              </div>
+            </div>
+          </div>
         </div>
       )}
     </div>

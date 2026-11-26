@@ -7,7 +7,15 @@ import cors from 'cors';
 import { createServer } from 'http';
 import { WebSocketServer, WebSocket } from 'ws';
 import { getSystemSnapshot, runQuickSystemAction } from './services/system.js';
-import { getTopProcesses, listInstalledApps, launchApplication, quitApplication, killProcessByPid, getAppIconPngPath } from './services/processes.js';
+import {
+  getTopProcesses,
+  listInstalledApps,
+  launchApplication,
+  quitApplication,
+  killProcessByPid,
+  getAppIconPngPath,
+  uninstallApplication,
+} from './services/processes.js';
 import {
   getBookmarks,
   listDirectory,
@@ -168,6 +176,20 @@ app.post('/api/apps/quit', async (req, res) => {
   const { appName } = req.body;
   const result = await quitApplication(appName);
   res.json(result);
+});
+
+app.post('/api/apps/uninstall', async (req, res) => {
+  try {
+    const { appPath, appName, cleanLeftovers } = req.body;
+    const result = await uninstallApplication(
+      String(appPath || ''),
+      String(appName || ''),
+      cleanLeftovers !== false
+    );
+    res.json(result);
+  } catch (err: any) {
+    res.status(500).json({ ok: false, message: err.message });
+  }
 });
 
 app.post('/api/processes/kill', async (req, res) => {

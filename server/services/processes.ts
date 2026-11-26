@@ -263,3 +263,118 @@ export async function killProcessByPid(pid: number, force = false): Promise<{ ok
     return { ok: false, message: `Failed to kill PID ${pid}: ${err.message}` };
   }
 }
+
+/**
+ * Safely uninstalls an application across macOS, Windows, and Linux:
+ * - Protects core OS / Apple System applications (/System/Applications)
+ * - Gracefully quits the running app first
+ * - On macOS: moves the .app bundle + optional ~/Library user caches/preferences to ~/.Trash
+ *   (falls back to Finder AppleScript delete prompt if the app is owned by root)
+ * - On Windows: triggers winget uninstall or opens Windows Apps & Features
+ */
+export async function uninstallApplication(
+  appPath: string,
+  appName: string,
+  cleanLeftovers = true
+): Promise<{ ok: boolean; message: string; cleanedPaths?: string[] }> {
+  const platform = os.platform();
+  const resolved = path.resolve(appPath || '');
+
+  // Block uninstalling protected macOS / System apps
+  if (
+    resolved.startsWith('/System/') ||
+    resolved === '/Applications/Safari.app' ||
+    !resolved ||
+    resolved === '/'
+  ) {
+    return {
+      ok: false,
+      message: `Cannot uninstall protected system application: ${appName}`,
+    };
+  }
+
+  // 1. Try quitting the application first so files aren't locked
+  await quitApplication(appName).catch(() => {});
+
+  if (platform === 'darwin') {
+    if (!resolved.endsWith('.app') || !fsSync.existsSync(resolved)) {
+      return { ok: false, message: `Application bundle not found: ${resolved}` };
+    }
+
+    const trashDir = path.join(os.homedir(), '.Trash');
+    const trashTarget = path.join(trashDir, `${Date.now()}_${path.basename(resolved)}`);
+    const cleanedPaths: string[] = [];
+
+    try {
+      // Try direct move to user's ~/.Trash
+      await fs.rename(resolved, trashTarget);
+      cleanedPaths.push(resolved);
+    } catch {
+      // Fallback: use macOS Finder via AppleScript (prompts native macOS TouchID / Password dialog if app is root-owned)
+      try {
+        const safePosix = resolved.replace(/"/g, '\\"');
+        await execFileAsync('osascript', [
+          '-e',
+          `tell application "Finder" to delete POSIX file "${safePosix}"`,
+        ]);
+        cleanedPaths.push(resolved);
+      } catch (err: any) {
+        return {
+          ok: false,
+          message: `Could not move ${appName} to Trash (${err.message}). Check permissions in Finder.`,
+        };
+      }
+    }
+
+    // Optional: Clean leftover caches & application support in ~/Library
+    if (cleanLeftovers && appName) {
+      const home = os.homedir();
+      const candidates = [
+        path.join(home, 'Library', 'Application Support', appName),
+        path.join(home, 'Library', 'Caches', appName),
+        path.join(home, 'Library', 'Logs', appName),
+      ];
+      for (const item of candidates) {
+        if (fsSync.existsSync(item)) {
+          try {
+            const dest = path.join(trashDir, `${Date.now()}_${path.basename(item)}_leftover`);
+            await fs.rename(item, dest);
+            cleanedPaths.push(item);
+          } catch {
+            // ignore inaccessible cache
+          }
+        }
+      }
+    }
+
+    cachedAppsList = null;
+
+    return {
+      ok: true,
+      message: `Uninstalled "${appName}" and moved ${cleanedPaths.length} item(s) to macOS Trash.`,
+      cleanedPaths,
+    };
+  } else if (platform === 'win32') {
+    try {
+      await execFileAsync('winget', ['uninstall', '--name', appName, '--silent']);
+      cachedAppsList = null;
+      return { ok: true, message: `Uninstalled "${appName}" via Windows Winget.` };
+    } catch {
+      await execFileAsync('cmd.exe', ['/c', 'start', 'ms-settings:appsfeatures']).catch(() => {});
+      return {
+        ok: true,
+        message: `Opened Windows Installed Apps settings to complete uninstall for "${appName}".`,
+      };
+    }
+  } else {
+    if (resolved.startsWith(os.homedir()) && fsSync.existsSync(resolved)) {
+      await fs.unlink(resolved);
+      cachedAppsList = null;
+      return { ok: true, message: `Removed user application shortcut: ${resolved}` };
+    }
+    return {
+      ok: false,
+      message: `System package "${appName}" must be removed via apt/dnf/flatpak.`,
+    };
+  }
+}

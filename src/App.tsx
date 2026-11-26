@@ -956,20 +956,20 @@ function OneCommandModal({ t, onClose }: { t: typeof translations['en']; onClose
   const [copiedIdx, setCopiedIdx] = useState<number | null>(null);
   const commands = [
     {
-      title: '1. Zero-Install via NPX (macOS / Linux / Windows)',
+      title: '1. Run Directly from GitHub via NPX (macOS / Linux / Windows)',
+      cmd: 'npx github:ngohoang211020/smartmac-agent',
+    },
+    {
+      title: '2. One-Line Curl Installer (macOS & Linux)',
+      cmd: 'curl -fsSL https://raw.githubusercontent.com/ngohoang211020/smartmac-agent/main/install.sh | bash',
+    },
+    {
+      title: '3. One-Line PowerShell Installer (Windows)',
+      cmd: 'irm https://raw.githubusercontent.com/ngohoang211020/smartmac-agent/main/install.ps1 | iex',
+    },
+    {
+      title: '4. Global NPM Package (Once published to npm)',
       cmd: 'npx smartmac-agent',
-    },
-    {
-      title: '2. Run Directly from GitHub Repository',
-      cmd: 'npx github:hoangngo/smartmac-agent',
-    },
-    {
-      title: '3. One-Line Curl Installer (macOS & Linux)',
-      cmd: 'curl -fsSL https://raw.githubusercontent.com/hoangngo/smartmac-agent/main/install.sh | bash',
-    },
-    {
-      title: '4. One-Line PowerShell Installer (Windows)',
-      cmd: 'irm https://raw.githubusercontent.com/hoangngo/smartmac-agent/main/install.ps1 | iex',
     },
   ];
 

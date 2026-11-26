@@ -10,29 +10,29 @@ An open-source, cross-platform (**macOS, Linux, Windows**) local web dashboard a
 Once published to npm (or directly from your GitHub repo), run on any Mac, Linux, or Windows machine with a single command:
 
 ```bash
-# Directly from npm:
-npx smartmac-agent
+# Run directly from GitHub on any computer (macOS, Linux, Windows):
+npx github:ngohoang211020/smartmac-agent
 
-# Or directly from GitHub without publishing to npm:
-npx github:YOUR_GITHUB_USERNAME/smartmac-agent
+# Or from npm:
+npx smartmac-agent
 ```
 
 ### Option 2: Global CLI Install (`smartmac`)
 Install globally once and type `smartmac` anytime in your terminal:
 
 ```bash
-npm install -g smartmac-agent
+npm install -g github:ngohoang211020/smartmac-agent
 smartmac --port 4000
 ```
 
 ### Option 3: One-Line `curl` Installer (macOS & Linux)
 ```bash
-curl -fsSL https://raw.githubusercontent.com/YOUR_GITHUB_USERNAME/smartmac-agent/main/install.sh | bash
+curl -fsSL https://raw.githubusercontent.com/ngohoang211020/smartmac-agent/main/install.sh | bash
 ```
 
 ### Option 4: One-Line PowerShell Installer (Windows)
 ```powershell
-irm https://raw.githubusercontent.com/YOUR_GITHUB_USERNAME/smartmac-agent/main/install.ps1 | iex
+irm https://raw.githubusercontent.com/ngohoang211020/smartmac-agent/main/install.ps1 | iex
 ```
 
 ---

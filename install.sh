@@ -1,7 +1,7 @@
 #!/usr/bin/env bash
 set -e
 
-REPO_URL="${SMARTMAC_REPO_URL:-https://github.com/hoangngo/smartmac-agent.git}"
+REPO_URL="${SMARTMAC_REPO_URL:-https://github.com/ngohoang211020/smartmac-agent.git}"
 INSTALL_DIR="${SMARTMAC_INSTALL_DIR:-$HOME/.smartmac-agent}"
 PORT="${PORT:-4000}"
 

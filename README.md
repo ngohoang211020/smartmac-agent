@@ -62,6 +62,26 @@ git --version
 
 ---
 
+## 🖥️ Native macOS Desktop App (Auto-Start at Login)
+
+Turn SmartMac into a **native macOS Desktop Application** (`/Applications/SmartMac.app`) with a **Menu Bar icon** (`CPU` icon), native window (`WKWebView`), and **automatic launch when your Mac boots**:
+
+```bash
+# Build, install to /Applications/SmartMac.app, enable Launch at Login, and open:
+npm run desktop:install
+# (or: bash desktop/macos/build-app.sh)
+
+# Uninstall /Applications/SmartMac.app and remove the LaunchAgent:
+npm run desktop:uninstall
+```
+
+**Desktop App Highlights:**
+- **Auto-starts at macOS login** silently in the Menu Bar (`~/Library/LaunchAgents/com.smartmac.agent.plist`), with a **"Launch at Login"** checkbox right inside the Menu Bar dropdown to toggle it anytime.
+- **Runs on dedicated port `4545`** (`127.0.0.1:4545`) so it never conflicts with your dev servers on port `3000`/`4000`.
+- Closing the window keeps the agent alive in the Menu Bar; click the Menu Bar CPU icon → **Open SmartMac Dashboard** (or **Quit SmartMac** to shut down both the window and background server).
+
+---
+
 ## 📦 3. Option 2: Manual Step-by-Step Installation (Git Clone)
 
 If you prefer to install and run it step-by-step in any directory:

@@ -35,7 +35,9 @@
     "dev:server": "tsx watch server/index.ts",
     "dev:client": "vite",
     "build": "vite build && tsc -p tsconfig.server.json",
-    "start": "node ./bin/cli.mjs"
+    "start": "node ./bin/cli.mjs",
+    "desktop:install": "bash desktop/macos/build-app.sh",
+    "desktop:uninstall": "bash desktop/macos/build-app.sh --uninstall"
   },
   "dependencies": {
     "cors": "^2.8.5",

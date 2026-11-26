@@ -18,7 +18,8 @@ fi
 # 2. Clone or update repository
 if [ -d "$INSTALL_DIR/.git" ]; then
   echo "🔄 Updating existing installation in $INSTALL_DIR..."
-  git -C "$INSTALL_DIR" pull --ff-only
+  git -C "$INSTALL_DIR" fetch --depth 1 origin main
+  git -C "$INSTALL_DIR" reset --hard origin/main
 else
   echo "📦 Cloning SmartMac Agent into $INSTALL_DIR..."
   rm -rf "$INSTALL_DIR"

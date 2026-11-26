@@ -14,7 +14,8 @@ if (-not (Get-Command node -ErrorAction SilentlyContinue)) {
 
 if (Test-Path "$InstallDir\.git") {
     Write-Host "🔄 Updating existing installation in $InstallDir..."
-    git -C $InstallDir pull --ff-only
+    git -C $InstallDir fetch --depth 1 origin main
+    git -C $InstallDir reset --hard origin/main
 } else {
     Write-Host "📦 Cloning SmartMac Agent into $InstallDir..."
     if (Test-Path $InstallDir) { Remove-Item -Recurse -Force $InstallDir }

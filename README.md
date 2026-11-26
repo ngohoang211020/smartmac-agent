@@ -1,39 +1,56 @@
 # SmartMac (`smartmac-agent`) — Open-Source Local Laptop Admin & AI Housework Agent
 
-An open-source, cross-platform (**macOS, Linux, Windows**) local web dashboard and AI assistant to monitor and control your computer's **CPU, RAM, GPU, Battery, Disks, Applications, Processes, Files/Folders, Wi-Fi/Network**, and **Gmail & Facebook** accounts.
+An open-source, cross-platform (**macOS, Linux, Windows**) local web dashboard and AI assistant to monitor and control your computer's **CPU, RAM, GPU, Battery, Disks, Applications (Launch / Quit / Uninstall), Processes, Files/Folders, Wi-Fi/Network, Screen Capture / Video & Audio Recorder, Remote VPS SSH**, and **Gmail OAuth 2.0** inbox.
 
 ---
 
-## ⚡ Run on Any Computer with 1 Command
+## 🚀 Step-by-Step Installation Guide
 
-### Option 1: Zero-Install via `npx` (Recommended)
-Once published to npm (or directly from your GitHub repo), run on any Mac, Linux, or Windows machine with a single command:
+### Prerequisites
+- **Node.js v18+** and **Git** installed ([https://nodejs.org](https://nodejs.org)).
 
-```bash
-# Run directly from GitHub on any computer (macOS, Linux, Windows):
-npx github:ngohoang211020/smartmac-agent
+---
 
-# Or from npm:
-npx smartmac-agent
-```
+### Method 1: 1-Command Installer (Recommended — macOS, Linux, Windows)
 
-### Option 2: Global CLI Install (`smartmac`)
-Install globally once and type `smartmac` anytime in your terminal:
-
-```bash
-npm install -g github:ngohoang211020/smartmac-agent
-smartmac --port 4000
-```
-
-### Option 3: One-Line `curl` Installer (macOS & Linux)
+#### On macOS & Linux:
+Open **Terminal** and run this single command:
 ```bash
 curl -fsSL https://raw.githubusercontent.com/ngohoang211020/smartmac-agent/main/install.sh | bash
 ```
+- It automatically clones `smartmac-agent` into `~/.smartmac-agent`, installs lightweight runtime dependencies (`--omit=dev`), links the global **`smartmac`** CLI command into your PATH, and opens **http://localhost:4000** in your browser.
+- Next time, simply type:
+  ```bash
+  smartmac
+  # or on a custom port:
+  smartmac --port 4000
+  ```
 
-### Option 4: One-Line PowerShell Installer (Windows)
+#### On Windows 10 / 11 (PowerShell):
+Open **PowerShell** and run this single command:
 ```powershell
 irm https://raw.githubusercontent.com/ngohoang211020/smartmac-agent/main/install.ps1 | iex
 ```
+
+---
+
+### Method 2: Manual Step-by-Step Git Clone (All Platforms)
+
+If you want to clone and run or customize the source code step by step:
+
+```bash
+# Step 1: Clone the repository
+git clone https://github.com/ngohoang211020/smartmac-agent.git
+cd smartmac-agent
+
+# Step 2: Install dependencies
+npm install --omit=dev
+
+# Step 3: Start the SmartMac server & open the dashboard (http://localhost:4000)
+npm start
+```
+
+*(For active development with hot-reload on port `5173` + backend on port `4000`, run `npm install` and `npm run dev`).*
 
 ---
 
@@ -50,35 +67,26 @@ Options:
 
 ---
 
-## ✨ Key Features
+## 🔒 Built-In 5-Layer Security Architecture
 
-- **SmartHR-Inspired Clean Light Dashboard**: Real-time WebSocket stream (every 2s) with multi-segment resource donut charts, circular uptime/battery gauges, and per-core CPU bars.
-- **Process & Application Manager**: View top CPU/RAM processes, kill unresponsive PIDs, and launch or quit installed applications.
-- **File & Folder Explorer**: Browse directories, preview & edit text/code files in place, create folders, move files to Trash, or reveal in Finder.
-- **Wi-Fi & Network Control Center**: Inspect current Wi-Fi SSID, signal, gateway, DNS servers, live RX/TX bandwidth, scan nearby Wi-Fi networks, toggle Wi-Fi power, and run ping diagnostics.
-- **Gmail & Facebook Integration Hub**: Connect via Gmail OAuth2 / App Password (IMAP/SMTP) and Facebook Graph API, or use one-click native browser launchers.
-- **Built-in AI Super Agent**: Control your computer using natural language (`"open Calculator"`, `"ping 1.1.1.1"`, `"flush dns"`, `"check system health"`), with optional **Gemini 2.5 Flash** integration.
+1. **Loopback-Only Binding (`127.0.0.1`)**: Blocks anyone else on your public Wi-Fi or LAN from accessing port `4000`.
+2. **Anti-CSRF & Anti-DNS-Rebinding Guard**: Rejects any request from external browser tabs or untrusted `Origin`/`Host` headers.
+3. **Dashboard Admin PIN Lock (`🛡️` Shield Icon)**: Set a salted SHA-256 Admin PIN in the top header to lock the dashboard with session-token authentication.
+4. **Command-Injection Prevention (`execFile`)**: Uses safe argument arrays instead of shell string interpolation.
+5. **Owner-Only File Permissions (`chmod 0600`)**: Local OAuth2 tokens (`.local-agent-config.json`), VPS profiles (`.local-vps-servers.json`), and PIN hashes (`.local-security.json`) are restricted to your OS user account and excluded from Git.
 
 ---
 
-## 📦 How to Publish Your Open-Source Package
+## ✨ Key Modules
 
-1. **Push to GitHub**:
-   ```bash
-   git init
-   git add .
-   git commit -m "feat: initial open-source release of smartmac-agent"
-   git branch -M main
-   git remote add origin https://github.com/YOUR_GITHUB_USERNAME/smartmac-agent.git
-   git push -u origin main
-   ```
-   *(As soon as it's on GitHub, anyone can run `npx github:YOUR_GITHUB_USERNAME/smartmac-agent`!)*
-
-2. **Publish to npm** (optional, so anyone can run `npx smartmac-agent`):
-   ```bash
-   npm login
-   npm publish --access public
-   ```
+- **Hardware Monitor**: Real-time WebSocket stream (every 2s) with multi-segment resource donut charts, circular uptime/battery gauges, and per-core CPU bars.
+- **Apps & Process Manager**: View top CPU/RAM processes with real native app icons, end tasks, launch/quit apps, and **safely Uninstall apps** with `~/Library` leftover cache cleaning.
+- **Capture & Record Studio (`REC`)**: Instant OS fullscreen/area screenshots, **30fps HD Screen Video Recorder** (with microphone narration), and **Audio Voice Recorder** with a built-in playback gallery.
+- **File & Folder Explorer**: Browse directories, preview & edit text/code files in place, create folders, move files to Trash, or reveal in Finder / Windows Explorer.
+- **Wi-Fi & Network Control Center**: Inspect current Wi-Fi SSID, signal, gateway, DNS servers, live RX/TX bandwidth, scan nearby Wi-Fi networks, toggle Wi-Fi power, and run ping diagnostics.
+- **Gmail OAuth 2.0 & 3-Day Unread Bell (`🔔`)**: Connect via Google OAuth 2.0 to sync unread emails from the last 3 days in the top header Bell notification popover, click any email to open it directly in Gmail, or compose and send emails.
+- **Advanced VPS & Remote SSH Manager (`PRO`)**: Save multiple VPS server profiles, launch native OS SSH Terminal windows in 1 click, or run remote health/Docker/Nginx checks.
+- **English / Vietnamese (`🇺🇸 ENG` | `🇻🇳 VIE`) & App Dark/Light Theme (`🌙` / `☀️`)**: Instant language and app-only background switching in the top header bar.
 
 ---
 

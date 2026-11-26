@@ -1,0 +1,447 @@
+import path from 'path';
+import { fileURLToPath } from 'url';
+import fs from 'fs';
+import 'dotenv/config';
+import express from 'express';
+import cors from 'cors';
+import { createServer } from 'http';
+import { WebSocketServer, WebSocket } from 'ws';
+import { getSystemSnapshot, runQuickSystemAction } from './services/system.js';
+import { getTopProcesses, listInstalledApps, launchApplication, quitApplication, killProcessByPid, getAppIconPngPath } from './services/processes.js';
+import {
+  getBookmarks,
+  listDirectory,
+  readFilePreview,
+  saveTextFile,
+  createFolder,
+  renameEntry,
+  moveToTrash,
+  revealInFinder,
+  searchFilesInDir,
+} from './services/files.js';
+import { getNetworkOverview, scanWifiNetworks, toggleWifiPower, runPingDiagnostic } from './services/network.js';
+import {
+  loadConfig,
+  saveConfig,
+  resetGmailSession,
+  getGmailOAuthUrl,
+  handleGmailOAuthCallback,
+  fetchGmailMessages,
+  fetchUnreadGmail3Days,
+  sendGmailMessage,
+  openExternalWebApp,
+} from './services/social.js';
+import {
+  listVpsServers,
+  saveVpsServer,
+  deleteVpsServer,
+  launchNativeSshTerminal,
+  executeRemoteVpsCommand,
+  listLocalSshKeys,
+} from './services/vps.js';
+import { processAgentMessage } from './services/agent.js';
+
+const __filename = fileURLToPath(import.meta.url);
+const __dirname = path.dirname(__filename);
+
+const app = express();
+app.use(cors());
+app.use(express.json({ limit: '5mb' }));
+
+// --- SYSTEM & HARDWARE ROUTES ---
+app.get('/api/system/snapshot', async (_req, res) => {
+  try {
+    const snap = await getSystemSnapshot();
+    res.json(snap);
+  } catch (err: any) {
+    res.status(500).json({ error: err.message });
+  }
+});
+
+app.post('/api/system/action', async (req, res) => {
+  try {
+    const { action } = req.body;
+    const result = await runQuickSystemAction(action);
+    res.json(result);
+  } catch (err: any) {
+    res.status(500).json({ ok: false, message: err.message });
+  }
+});
+
+// --- PROCESSES & APPLICATIONS ROUTES ---
+app.get('/api/processes', async (req, res) => {
+  try {
+    const limit = Number(req.query.limit) || 50;
+    const data = await getTopProcesses(limit);
+    res.json(data);
+  } catch (err: any) {
+    res.status(500).json({ error: err.message });
+  }
+});
+
+app.get('/api/apps', async (_req, res) => {
+  try {
+    const apps = await listInstalledApps();
+    res.json({ apps });
+  } catch (err: any) {
+    res.status(500).json({ error: err.message });
+  }
+});
+
+app.get('/api/apps/icon', async (req, res) => {
+  try {
+    const appPath = req.query.path ? String(req.query.path) : undefined;
+    const appName = req.query.name ? String(req.query.name) : undefined;
+    const pngPath = await getAppIconPngPath(appPath, appName);
+    if (pngPath && fs.existsSync(pngPath)) {
+      res.setHeader('Cache-Control', 'public, max-age=86400');
+      return res.sendFile(pngPath);
+    }
+    res.status(404).end();
+  } catch {
+    res.status(404).end();
+  }
+});
+
+app.post('/api/apps/launch', async (req, res) => {
+  const { appNameOrPath } = req.body;
+  const result = await launchApplication(appNameOrPath);
+  res.json(result);
+});
+
+app.post('/api/apps/quit', async (req, res) => {
+  const { appName } = req.body;
+  const result = await quitApplication(appName);
+  res.json(result);
+});
+
+app.post('/api/processes/kill', async (req, res) => {
+  const { pid, force } = req.body;
+  const result = await killProcessByPid(Number(pid), Boolean(force));
+  res.json(result);
+});
+
+// --- FILES & FOLDERS ROUTES ---
+app.get('/api/files/bookmarks', (_req, res) => {
+  res.json({ bookmarks: getBookmarks() });
+});
+
+app.get('/api/files/list', async (req, res) => {
+  try {
+    const dirPath = req.query.path ? String(req.query.path) : undefined;
+    const showHidden = req.query.hidden === 'true';
+    const data = await listDirectory(dirPath, showHidden);
+    res.json(data);
+  } catch (err: any) {
+    res.status(400).json({ error: err.message });
+  }
+});
+
+app.get('/api/files/preview', async (req, res) => {
+  try {
+    const filePath = String(req.query.path || '');
+    const data = await readFilePreview(filePath);
+    res.json(data);
+  } catch (err: any) {
+    res.status(400).json({ error: err.message });
+  }
+});
+
+app.post('/api/files/save', async (req, res) => {
+  try {
+    const { path: filePath, content } = req.body;
+    const data = await saveTextFile(filePath, content);
+    res.json(data);
+  } catch (err: any) {
+    res.status(400).json({ error: err.message });
+  }
+});
+
+app.post('/api/files/mkdir', async (req, res) => {
+  try {
+    const { path: folderPath } = req.body;
+    const data = await createFolder(folderPath);
+    res.json(data);
+  } catch (err: any) {
+    res.status(400).json({ error: err.message });
+  }
+});
+
+app.post('/api/files/rename', async (req, res) => {
+  try {
+    const { oldPath, newName } = req.body;
+    const data = await renameEntry(oldPath, newName);
+    res.json(data);
+  } catch (err: any) {
+    res.status(400).json({ error: err.message });
+  }
+});
+
+app.post('/api/files/trash', async (req, res) => {
+  try {
+    const { path: targetPath } = req.body;
+    const data = await moveToTrash(targetPath);
+    res.json(data);
+  } catch (err: any) {
+    res.status(400).json({ error: err.message });
+  }
+});
+
+app.post('/api/files/reveal', async (req, res) => {
+  try {
+    const { path: targetPath } = req.body;
+    const data = await revealInFinder(targetPath);
+    res.json(data);
+  } catch (err: any) {
+    res.status(400).json({ error: err.message });
+  }
+});
+
+app.get('/api/files/search', async (req, res) => {
+  try {
+    const dirPath = String(req.query.path || '');
+    const query = String(req.query.q || '');
+    const results = await searchFilesInDir(dirPath, query);
+    res.json({ results });
+  } catch (err: any) {
+    res.status(400).json({ error: err.message });
+  }
+});
+
+// --- WI-FI & NETWORK ROUTES ---
+app.get('/api/network/overview', async (_req, res) => {
+  try {
+    const data = await getNetworkOverview();
+    res.json(data);
+  } catch (err: any) {
+    res.status(500).json({ error: err.message });
+  }
+});
+
+app.get('/api/network/wifi-scan', async (_req, res) => {
+  try {
+    const networks = await scanWifiNetworks();
+    res.json({ networks });
+  } catch (err: any) {
+    res.status(500).json({ error: err.message });
+  }
+});
+
+app.post('/api/network/wifi-toggle', async (req, res) => {
+  const { enabled, iface } = req.body;
+  const result = await toggleWifiPower(Boolean(enabled), iface || 'en0');
+  res.json(result);
+});
+
+app.post('/api/network/ping', async (req, res) => {
+  const { host, count } = req.body;
+  const result = await runPingDiagnostic(host || '1.1.1.1', count || 3);
+  res.json(result);
+});
+
+// --- GMAIL OAUTH2 & CONFIG ROUTES ---
+app.get('/api/social/config', async (_req, res) => {
+  const cfg = await loadConfig();
+  res.json({
+    hasGeminiKey: Boolean(cfg.geminiApiKey),
+    gmailEmail: cfg.gmail?.email || '',
+    gmailClientId: cfg.gmail?.clientId || '',
+    hasGmailClientSecret: Boolean(cfg.gmail?.clientSecret),
+    gmailRedirectUri: cfg.gmail?.redirectUri || 'http://localhost:4000/api/social/gmail/oauth/callback',
+    hasGmailAppPassword: Boolean(cfg.gmail?.appPassword),
+    hasGmailAccessToken: Boolean(cfg.gmail?.accessToken),
+    hasGmailRefreshToken: Boolean(cfg.gmail?.refreshToken),
+  });
+});
+
+app.post('/api/social/config', async (req, res) => {
+  try {
+    const updated = await saveConfig(req.body);
+    res.json({
+      ok: true,
+      hasGeminiKey: Boolean(updated.geminiApiKey),
+      gmailEmail: updated.gmail?.email || '',
+      gmailClientId: updated.gmail?.clientId || '',
+      hasGmailClientSecret: Boolean(updated.gmail?.clientSecret),
+      gmailRedirectUri: updated.gmail?.redirectUri || 'http://localhost:4000/api/social/gmail/oauth/callback',
+      hasGmailAppPassword: Boolean(updated.gmail?.appPassword),
+      hasGmailAccessToken: Boolean(updated.gmail?.accessToken),
+      hasGmailRefreshToken: Boolean(updated.gmail?.refreshToken),
+    });
+  } catch (err: any) {
+    res.status(500).json({ ok: false, message: err.message });
+  }
+});
+
+app.post('/api/social/gmail/reset', async (_req, res) => {
+  try {
+    const result = await resetGmailSession();
+    res.json(result);
+  } catch (err: any) {
+    res.status(500).json({ ok: false, message: err.message });
+  }
+});
+
+app.get('/api/social/gmail/oauth/url', async (_req, res) => {
+  const result = await getGmailOAuthUrl();
+  res.json(result);
+});
+
+app.get('/api/social/gmail/oauth/callback', async (req, res) => {
+  const code = String(req.query.code || '');
+  if (!code) {
+    return res.status(400).send('Missing OAuth2 code parameter.');
+  }
+  const result = await handleGmailOAuthCallback(code);
+  if (result.ok) {
+    res.send(`
+      <!doctype html>
+      <html>
+        <head>
+          <meta charset="utf-8" />
+          <title>Gmail OAuth2 Connected</title>
+          <style>
+            body { font-family: -apple-system, sans-serif; background: #f8f9fa; display: flex; align-items: center; justify-content: center; height: 100vh; margin: 0; }
+            .card { background: white; padding: 32px; border-radius: 16px; border: 1px solid #e2e8f0; text-align: center; max-width: 420px; box-shadow: 0 10px 25px rgba(0,0,0,0.05); }
+            .badge { display: inline-block; background: #ecfdf5; color: #059669; font-weight: 700; padding: 6px 12px; border-radius: 999px; font-size: 12px; margin-bottom: 12px; }
+            h2 { margin: 0 0 8px; color: #0f172a; }
+            p { color: #64748b; font-size: 14px; margin-bottom: 20px; }
+            a { display: inline-block; background: #f26522; color: white; text-decoration: none; padding: 10px 20px; border-radius: 8px; font-weight: 600; font-size: 13px; }
+          </style>
+        </head>
+        <body>
+          <div class="card">
+            <div class="badge">✓ OAUTH2 CONNECTED</div>
+            <h2>Signed in as ${result.email}</h2>
+            <p>Your Gmail account is now linked to SmartMac via Google OAuth 2.0. You can close this window or return to the dashboard.</p>
+            <script>
+              if (window.opener) {
+                window.opener.postMessage({ type: 'GMAIL_OAUTH_SUCCESS', email: '${result.email}' }, '*');
+                setTimeout(() => window.close(), 1500);
+              }
+            </script>
+            <a href="http://localhost:5173">Return to Dashboard</a>
+          </div>
+        </body>
+      </html>
+    `);
+  } else {
+    res.status(400).send(`OAuth2 Error: ${result.error}`);
+  }
+});
+
+app.get('/api/social/gmail', async (_req, res) => {
+  const data = await fetchGmailMessages(12);
+  res.json(data);
+});
+
+app.get('/api/social/gmail/unread-3d', async (_req, res) => {
+  const data = await fetchUnreadGmail3Days(15);
+  res.json(data);
+});
+
+app.post('/api/social/gmail/send', async (req, res) => {
+  const { to, subject, body } = req.body;
+  const result = await sendGmailMessage(to, subject, body);
+  res.json(result);
+});
+
+app.post('/api/social/open-web', async (req, res) => {
+  const { target } = req.body;
+  const result = await openExternalWebApp(target);
+  res.json(result);
+});
+
+// --- ADVANCED VPS & SSH MANAGER ROUTES ---
+app.get('/api/vps/servers', async (_req, res) => {
+  const servers = await listVpsServers();
+  const keys = await listLocalSshKeys();
+  res.json({ servers, keys });
+});
+
+app.post('/api/vps/servers', async (req, res) => {
+  try {
+    const servers = await saveVpsServer(req.body);
+    res.json({ ok: true, servers });
+  } catch (err: any) {
+    res.status(400).json({ ok: false, message: err.message });
+  }
+});
+
+app.delete('/api/vps/servers/:id', async (req, res) => {
+  const servers = await deleteVpsServer(req.params.id);
+  res.json({ ok: true, servers });
+});
+
+app.post('/api/vps/terminal', async (req, res) => {
+  const result = await launchNativeSshTerminal(req.body);
+  res.json(result);
+});
+
+app.post('/api/vps/exec', async (req, res) => {
+  const { server, command } = req.body;
+  const result = await executeRemoteVpsCommand(server, command);
+  res.json(result);
+});
+
+// --- AI AGENT CHAT ROUTE ---
+app.post('/api/agent/chat', async (req, res) => {
+  try {
+    const { message, history, lang } = req.body;
+    const result = await processAgentMessage(message || '', history || [], lang || 'vi');
+    res.json(result);
+  } catch (err: any) {
+    res.status(500).json({ error: err.message });
+  }
+});
+
+// --- SERVE BUNDLED PRODUCTION FRONTEND FOR SINGLE-COMMAND CLI ---
+const distDir = path.resolve(__dirname, '../dist');
+if (fs.existsSync(distDir)) {
+  app.use(express.static(distDir));
+  app.get('*', (req, res, next) => {
+    if (req.path.startsWith('/api') || req.path.startsWith('/ws')) return next();
+    res.sendFile(path.join(distDir, 'index.html'));
+  });
+}
+
+// --- HTTP & WEBSOCKET SERVER FOR REAL-TIME TELEMETRY ---
+const PORT = Number(process.env.PORT) || 4000;
+const server = createServer(app);
+const wss = new WebSocketServer({ server, path: '/ws' });
+
+const clients = new Set<WebSocket>();
+
+wss.on('connection', async (ws) => {
+  clients.add(ws);
+  try {
+    const initial = await getSystemSnapshot();
+    if (ws.readyState === WebSocket.OPEN) {
+      ws.send(JSON.stringify({ type: 'snapshot', data: initial }));
+    }
+  } catch {
+    // ignore
+  }
+  ws.on('close', () => {
+    clients.delete(ws);
+  });
+});
+
+setInterval(async () => {
+  if (clients.size === 0) return;
+  try {
+    const snapshot = await getSystemSnapshot();
+    const payload = JSON.stringify({ type: 'snapshot', data: snapshot });
+    for (const client of clients) {
+      if (client.readyState === WebSocket.OPEN) {
+        client.send(payload);
+      }
+    }
+  } catch {
+    // ignore
+  }
+}, 2000);
+
+server.listen(PORT, () => {
+  console.log(`SmartMac Agent Server listening on http://localhost:${PORT}`);
+});

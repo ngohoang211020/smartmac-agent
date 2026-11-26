@@ -1,0 +1,23 @@
+<svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 120 120" fill="none">
+  <defs>
+    <linearGradient id="bgGrad" x1="0" y1="0" x2="120" y2="120" gradientUnits="userSpaceOnUse">
+      <stop offset="0%" stop-color="#FF7A33" />
+      <stop offset="50%" stop-color="#F26522" />
+      <stop offset="100%" stop-color="#D9480F" />
+    </linearGradient>
+    <linearGradient id="coreGrad" x1="36" y1="32" x2="84" y2="80" gradientUnits="userSpaceOnUse">
+      <stop offset="0%" stop-color="#1B2537" />
+      <stop offset="100%" stop-color="#0F172A" />
+    </linearGradient>
+  </defs>
+  <!-- Edge-to-edge rounded squircle (zero outer white margin) -->
+  <rect width="120" height="120" rx="28" fill="url(#bgGrad)" />
+  <!-- Subtle inner glass highlight -->
+  <rect x="3" y="3" width="114" height="114" rx="25" stroke="white" stroke-opacity="0.22" stroke-width="2" />
+  <!-- Laptop Screen Frame -->
+  <rect x="24" y="28" width="72" height="48" rx="8" fill="url(#coreGrad)" stroke="white" stroke-width="4.5" />
+  <!-- Pulse / AI Wave inside screen -->
+  <path d="M36 52H47L53 39L61 65L67 48L72 52H84" stroke="#FF8547" stroke-width="4.5" stroke-linecap="round" stroke-linejoin="round" />
+  <!-- Laptop Base -->
+  <path d="M16 82C16 79.7909 17.7909 78 20 78H100C102.209 78 104 79.7909 104 82V84C104 87.3137 101.314 90 98 90H22C18.6863 90 16 87.3137 16 84V82Z" fill="white" />
+</svg>

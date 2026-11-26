@@ -1,4 +1,4 @@
-﻿# PowerShell One-Line Installer for Windows
+﻿# PowerShell One-Line Installer for Windows 10 / 11
 $ErrorActionPreference = "Stop"
 
 $RepoUrl = if ($env:SMARTMAC_REPO_URL) { $env:SMARTMAC_REPO_URL } else { "https://github.com/ngohoang211020/smartmac-agent.git" }
@@ -17,12 +17,13 @@ if (Test-Path "$InstallDir\.git") {
     git -C $InstallDir pull --ff-only
 } else {
     Write-Host "📦 Cloning SmartMac Agent into $InstallDir..."
+    if (Test-Path $InstallDir) { Remove-Item -Recurse -Force $InstallDir }
     git clone --depth 1 $RepoUrl $InstallDir
 }
 
 Set-Location $InstallDir
-npm install --no-audit --no-fund
-npm run build
+Write-Host "⚙️  Installing runtime dependencies..."
+npm install --omit=dev --no-audit --no-fund
 
 Write-Host "✅ Launching SmartMac on http://localhost:$Port ..." -ForegroundColor Green
 $env:PORT = $Port

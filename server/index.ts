@@ -527,7 +527,7 @@ if (fs.existsSync(distDir)) {
 }
 
 // --- HTTP & WEBSOCKET SERVER FOR REAL-TIME TELEMETRY ---
-const PORT = Number(process.env.PORT) || 4000;
+let currentPort = Number(process.env.PORT) || 4000;
 const HOST = process.env.HOST || '127.0.0.1';
 const server = createServer(app);
 const wss = new WebSocketServer({ server, path: '/ws' });
@@ -570,6 +570,18 @@ setInterval(async () => {
   }
 }, 2000);
 
-server.listen(PORT, HOST, () => {
-  console.log(`SmartMac Agent Server listening securely on http://${HOST}:${PORT} (Loopback Protected)`);
+server.on('error', (err: any) => {
+  if (err.code === 'EADDRINUSE') {
+    console.log(`⚠️  Port ${currentPort} is already in use — switching to port ${currentPort + 1}...`);
+    currentPort += 1;
+    setTimeout(() => {
+      server.listen(currentPort, HOST);
+    }, 250);
+  } else {
+    console.error('Server error:', err);
+  }
+});
+
+server.listen(currentPort, HOST, () => {
+  console.log(`SmartMac Agent Server listening securely on http://${HOST}:${currentPort} (Loopback Protected)`);
 });

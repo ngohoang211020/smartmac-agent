@@ -73,6 +73,20 @@ import {
   captureNativeAppWindowFrame,
   openMacScreenRecordingSettings,
 } from './services/cameras.js';
+import {
+  nodeSecretAuthGuard,
+  getLocalNodeTelemetry,
+  listLocalDockerContainers,
+  runLocalDockerAction,
+  execLocalNodeCommand,
+  listClusterNodes,
+  saveClusterNode,
+  deleteClusterNode,
+  pollAllClusterNodes,
+  getRemoteNodeDocker,
+  runRemoteNodeDockerAction,
+  broadcastCommandToNodes,
+} from './services/cluster.js';
 import { processAgentMessage } from './services/agent.js';
 import {
   strictLocalOriginGuard,
@@ -101,6 +115,60 @@ app.use(
 // ---express.json({ limit: '50mb' }) for video/audio recording uploads ---
 app.use(express.json({ limit: '50mb' }));
 app.use('/api', adminPinAuthGuard);
+
+// --- TRANSPARENT MULTI-VM TARGET NODE PROXY MIDDLEWARE ---
+// When the UI selects a remote VM in the top VM Switcher Bar, it sends `x-target-node: <nodeId>`.
+// All standard system/files/processes/network/agent API calls are transparently proxied to that VM!
+app.use('/api', async (req, res, next) => {
+  const targetNodeId = String(req.headers['x-target-node'] || '').trim();
+  if (
+    !targetNodeId ||
+    targetNodeId === 'local' ||
+    req.path.startsWith('/cluster') ||
+    req.path.startsWith('/security') ||
+    req.path.startsWith('/node') ||
+    req.path.startsWith('/social')
+  ) {
+    return next();
+  }
+
+  try {
+    const nodes = await listClusterNodes();
+    const node = nodes.find((n) => n.id === targetNodeId);
+    if (!node) {
+      return res.status(404).json({ error: `Target VM node not found: ${targetNodeId}` });
+    }
+
+    const forwardUrl = `${node.url}${req.originalUrl}`;
+    const controller = new AbortController();
+    const timer = setTimeout(() => controller.abort(), 15000);
+    try {
+      const fetchInit: RequestInit = {
+        method: req.method,
+        signal: controller.signal,
+        headers: {
+          'Content-Type': 'application/json',
+          'x-node-secret': node.secret,
+        },
+      };
+      if (req.method !== 'GET' && req.method !== 'HEAD' && req.body) {
+        fetchInit.body = JSON.stringify(req.body);
+      }
+      const upstream = await fetch(forwardUrl, fetchInit);
+      const contentType = upstream.headers.get('content-type') || 'application/json';
+      res.status(upstream.status);
+      res.setHeader('Content-Type', contentType);
+      const buf = Buffer.from(await upstream.arrayBuffer());
+      return res.send(buf);
+    } finally {
+      clearTimeout(timer);
+    }
+  } catch (err: any) {
+    return res.status(502).json({
+      error: `Failed to reach remote VM (${targetNodeId}): ${err.message}`,
+    });
+  }
+});
 
 // --- SECURITY & ADMIN PIN ROUTES ---
 app.get('/api/security/status', (req, res) => {
@@ -608,6 +676,91 @@ app.get('/api/cameras/native/:appKey/frame', async (req, res) => {
 app.post('/api/cameras/screen-permission-settings', async (_req, res) => {
   const result = await openMacScreenRecordingSettings();
   res.json(result);
+});
+
+// --- AGENT NODE API ROUTES (called by Master Orchestrator on each VM) ---
+app.get('/api/node/telemetry', nodeSecretAuthGuard, async (_req, res) => {
+  try {
+    const data = await getLocalNodeTelemetry();
+    res.json(data);
+  } catch (err: any) {
+    res.status(500).json({ error: err.message });
+  }
+});
+
+app.get('/api/node/docker', nodeSecretAuthGuard, async (_req, res) => {
+  const data = await listLocalDockerContainers();
+  res.json(data);
+});
+
+app.post('/api/node/docker/action', nodeSecretAuthGuard, async (req, res) => {
+  const { containerId, action } = req.body;
+  const result = await runLocalDockerAction(String(containerId || ''), action);
+  res.json(result);
+});
+
+app.post('/api/node/exec', nodeSecretAuthGuard, async (req, res) => {
+  const { command } = req.body;
+  const result = await execLocalNodeCommand(String(command || ''));
+  res.json(result);
+});
+
+// --- MASTER CLUSTER ORCHESTRATOR ROUTES (manage N remote VMs from 1 web UI) ---
+app.get('/api/cluster/nodes', async (_req, res) => {
+  const nodes = await listClusterNodes();
+  res.json({
+    nodes: nodes.map((n) => ({
+      ...n,
+      secret: n.secret ? '••••••••' : '',
+      hasSecret: Boolean(n.secret),
+    })),
+  });
+});
+
+app.post('/api/cluster/nodes', async (req, res) => {
+  try {
+    const nodes = await saveClusterNode(req.body);
+    res.json({ ok: true, nodes });
+  } catch (err: any) {
+    res.status(400).json({ ok: false, message: err.message });
+  }
+});
+
+app.delete('/api/cluster/nodes/:id', async (req, res) => {
+  const nodes = await deleteClusterNode(req.params.id);
+  res.json({ ok: true, nodes });
+});
+
+app.get('/api/cluster/fleet', async (_req, res) => {
+  try {
+    const fleet = await pollAllClusterNodes();
+    res.json({ fleet, checkedAt: Date.now() });
+  } catch (err: any) {
+    res.status(500).json({ error: err.message });
+  }
+});
+
+app.get('/api/cluster/nodes/:id/docker', async (req, res) => {
+  const data =
+    req.params.id === 'local'
+      ? await listLocalDockerContainers()
+      : await getRemoteNodeDocker(req.params.id);
+  res.json(data);
+});
+
+app.post('/api/cluster/nodes/:id/docker/action', async (req, res) => {
+  const { containerId, action } = req.body;
+  const result =
+    req.params.id === 'local'
+      ? await runLocalDockerAction(String(containerId || ''), action)
+      : await runRemoteNodeDockerAction(req.params.id, String(containerId || ''), action);
+  res.json(result);
+});
+
+app.post('/api/cluster/broadcast', async (req, res) => {
+  const { nodeIds, command } = req.body;
+  const results = await broadcastCommandToNodes(Array.isArray(nodeIds) ? nodeIds : [], String(command || ''));
+  res.json({ ok: true, results });
 });
 
 // --- AI AGENT CHAT ROUTE ---

@@ -129,7 +129,7 @@ function formatUptime(seconds: number): string {
   return `${pad(h)}:${pad(m)}:${pad(s)}`;
 }
 
-type ActiveTab = 'overview' | 'apps' | 'files' | 'network' | 'social' | 'vps' | 'media' | 'cameras';
+type ActiveTab = 'overview' | 'apps' | 'files' | 'network' | 'social' | 'vps' | 'cluster' | 'media' | 'cameras';
 
 function openGmailMessageDirect(messageId: string) {
   if (!messageId || messageId.startsWith('demo-') || messageId.startsWith('cli-')) {
@@ -179,6 +179,68 @@ export default function App() {
   };
 
   const [activeTab, setActiveTab] = useState<ActiveTab>('overview');
+  const [activeNodeId, setActiveNodeId] = useState<string>(() => localStorage.getItem('smartmac_active_node') || 'local');
+  const [clusterNodes, setClusterNodes] = useState<Array<{ id: string; name: string; url: string; tags?: string[] }>>([]);
+
+  const loadClusterNodesList = async () => {
+    try {
+      const res = await fetch('/api/cluster/nodes');
+      const data = await res.json();
+      setClusterNodes(data.nodes || []);
+    } catch {
+      // ignore
+    }
+  };
+
+  useEffect(() => {
+    loadClusterNodesList();
+  }, []);
+
+  const switchTargetNode = (nodeId: string) => {
+    setActiveNodeId(nodeId);
+    localStorage.setItem('smartmac_active_node', nodeId);
+    setSnapshot(null);
+    setHistory([]);
+    fetch('/api/system/snapshot')
+      .then((r) => r.json())
+      .then((d) => {
+        if (d && d.cpu) setSnapshot(d);
+      })
+      .catch(() => {});
+  };
+
+  // Poll remote VM snapshot every 2.5s when viewing a remote VM node (local uses WebSocket)
+  useEffect(() => {
+    if (activeNodeId === 'local') return;
+    let alive = true;
+    const pull = async () => {
+      try {
+        const res = await fetch('/api/system/snapshot');
+        const snap = await res.json();
+        if (alive && snap && snap.cpu) {
+          setSnapshot(snap);
+          setHistory((prev) => [
+            ...prev.slice(-29),
+            {
+              time: new Date(snap.timestamp).toLocaleTimeString([], { hour12: false, minute: '2-digit', second: '2-digit' }),
+              cpu: snap.cpu.currentLoad,
+              ram: snap.memory.usagePercent,
+              rx: snap.networkTraffic.rxSec,
+              tx: snap.networkTraffic.txSec,
+            },
+          ]);
+        }
+      } catch {
+        // ignore
+      }
+    };
+    pull();
+    const timer = setInterval(pull, 2500);
+    return () => {
+      alive = false;
+      clearInterval(timer);
+    };
+  }, [activeNodeId]);
   const [openMenuGroups, setOpenMenuGroups] = useState<{
     monitor: boolean;
     workspace: boolean;
@@ -317,6 +379,7 @@ export default function App() {
     const wsUrl = `${protocol}//${window.location.host}/ws`;
 
     const handleSnapshot = (snap: SystemSnapshot) => {
+      if ((localStorage.getItem('smartmac_active_node') || 'local') !== 'local') return;
       setSnapshot(snap);
       setHistory((prev) => [
         ...prev.slice(-29),
@@ -503,10 +566,16 @@ export default function App() {
                         badge={unread3d.unreadCount > 0 ? String(unread3d.unreadCount) : 'OAuth2'}
                       />
                       <SubMenuItem
+                        active={activeTab === 'cluster'}
+                        onClick={() => setActiveTab('cluster')}
+                        label={t.clusterOrchestrator}
+                        badge={clusterNodes.length > 0 ? String(clusterNodes.length) : 'VM'}
+                      />
+                      <SubMenuItem
                         active={activeTab === 'vps'}
                         onClick={() => setActiveTab('vps')}
                         label={t.vpsManager}
-                        badge="PRO"
+                        badge="SSH"
                       />
                       <SubMenuItem
                         active={activeTab === 'cameras'}
@@ -1065,24 +1134,82 @@ export default function App() {
               </div>
             )}
 
-            {/* Active Tab View */}
-            {activeTab === 'overview' && (
-              <SmartHROverviewTab
-                t={t}
-                snapshot={snapshot}
-                history={history}
-                onNavigate={setActiveTab}
-                onOpenAgent={() => setAgentOpen(true)}
-                onToast={showToast}
-              />
-            )}
-            {activeTab === 'apps' && <AppsAndProcessesTab t={t} lang={lang} onToast={showToast} />}
-            {activeTab === 'files' && <FileExplorerTab t={t} onToast={showToast} />}
-            {activeTab === 'network' && <WifiAndNetworkTab t={t} lang={lang} snapshot={snapshot} onToast={showToast} />}
-            {activeTab === 'social' && <SocialHubTab t={t} lang={lang} onToast={showToast} />}
-            {activeTab === 'vps' && <VpsManagerTab t={t} lang={lang} onToast={showToast} />}
-            {activeTab === 'media' && <MediaStudioTab t={t} lang={lang} onToast={showToast} />}
-            {activeTab === 'cameras' && <CamerasMonitorTab t={t} lang={lang} onToast={showToast} />}
+            {/* MULTI-VM / NODE TAB SWITCHER BAR (Switch seamlessly between Local Machine & any Remote VM Node) */}
+            <div className="bg-white px-3 py-2 rounded-xl border border-slate-200 shadow-2xs flex items-center justify-between gap-2 overflow-x-auto">
+              <div className="flex items-center gap-1.5">
+                <span className="text-[10px] font-bold uppercase tracking-wider text-slate-400 px-1.5 shrink-0">
+                  {lang === 'vi' ? 'MÁY CHỦ ĐANG CHỌN:' : 'ACTIVE NODE:'}
+                </span>
+
+                <button
+                  onClick={() => switchTargetNode('local')}
+                  className={`px-3 py-1.5 rounded-lg text-xs font-bold flex items-center gap-1.5 shrink-0 transition cursor-pointer ${
+                    activeNodeId === 'local'
+                      ? 'bg-[#F26522] text-white shadow-2xs'
+                      : 'bg-slate-100 text-slate-600 hover:bg-slate-200'
+                  }`}
+                >
+                  <Laptop className="w-3.5 h-3.5" />
+                  <span>{lang === 'vi' ? 'Local (Máy này)' : 'Local Machine'}</span>
+                </button>
+
+                {clusterNodes.map((node) => (
+                  <button
+                    key={node.id}
+                    onClick={() => switchTargetNode(node.id)}
+                    className={`px-3 py-1.5 rounded-lg text-xs font-bold flex items-center gap-1.5 shrink-0 transition cursor-pointer ${
+                      activeNodeId === node.id
+                        ? 'bg-[#1B2537] text-white shadow-2xs ring-2 ring-orange-400/50'
+                        : 'bg-slate-100 text-slate-700 hover:bg-slate-200'
+                    }`}
+                    title={node.url}
+                  >
+                    <span className="w-2 h-2 rounded-full bg-emerald-400" />
+                    <span>{node.name}</span>
+                  </button>
+                ))}
+              </div>
+
+              <button
+                onClick={() => setActiveTab('cluster')}
+                className="px-2.5 py-1 rounded-lg bg-orange-50 hover:bg-orange-100 text-[#F26522] border border-orange-200 text-[11px] font-bold shrink-0 cursor-pointer"
+              >
+                {lang === 'vi' ? '+ Quản lý Cụm VM' : '+ Manage VM Fleet'}
+              </button>
+            </div>
+
+            {/* Active Tab View (keyed by activeNodeId so switching VMs cleanly reloads each module!) */}
+            <React.Fragment key={activeNodeId}>
+              {activeTab === 'overview' && (
+                <SmartHROverviewTab
+                  t={t}
+                  snapshot={snapshot}
+                  history={history}
+                  onNavigate={setActiveTab}
+                  onOpenAgent={() => setAgentOpen(true)}
+                  onToast={showToast}
+                />
+              )}
+              {activeTab === 'apps' && <AppsAndProcessesTab t={t} lang={lang} onToast={showToast} />}
+              {activeTab === 'files' && <FileExplorerTab t={t} onToast={showToast} />}
+              {activeTab === 'network' && <WifiAndNetworkTab t={t} lang={lang} snapshot={snapshot} onToast={showToast} />}
+              {activeTab === 'social' && <SocialHubTab t={t} lang={lang} onToast={showToast} />}
+              {activeTab === 'vps' && <VpsManagerTab t={t} lang={lang} onToast={showToast} />}
+              {activeTab === 'cluster' && (
+                <ClusterOrchestratorTab
+                  lang={lang}
+                  activeNodeId={activeNodeId}
+                  onSwitchNode={(id) => {
+                    switchTargetNode(id);
+                    setActiveTab('overview');
+                  }}
+                  onNodesChanged={loadClusterNodesList}
+                  onToast={showToast}
+                />
+              )}
+              {activeTab === 'media' && <MediaStudioTab t={t} lang={lang} onToast={showToast} />}
+              {activeTab === 'cameras' && <CamerasMonitorTab t={t} lang={lang} onToast={showToast} />}
+            </React.Fragment>
           </main>
 
           {agentOpen && <AIAgentDrawer t={t} lang={lang} onClose={() => setAgentOpen(false)} onToast={showToast} />}
@@ -5356,6 +5483,468 @@ function EmbeddedCameraCard({
           >
             {isVi ? 'Đóng' : 'Stop'}
           </button>
+        </div>
+      </div>
+    </div>
+  );
+}
+
+/* ============================================================================
+   8.5 MULTI-VM CLUSTER ORCHESTRATOR & DOCKER FLEET TAB
+============================================================================ */
+function ClusterOrchestratorTab({
+  lang,
+  activeNodeId,
+  onSwitchNode,
+  onNodesChanged,
+  onToast,
+}: {
+  lang: Lang;
+  activeNodeId: string;
+  onSwitchNode: (nodeId: string) => void;
+  onNodesChanged: () => void;
+  onToast: (m: string, t?: 'ok' | 'err') => void;
+}) {
+  const isVi = lang === 'vi';
+  const [fleet, setFleet] = useState<any[]>([]);
+  const [loadingFleet, setLoadingFleet] = useState(false);
+  const [addingOpen, setAddingOpen] = useState(false);
+  const [selectedDockerNode, setSelectedDockerNode] = useState<string>('local');
+  const [dockerContainers, setDockerContainers] = useState<any[]>([]);
+  const [dockerAvailable, setDockerAvailable] = useState(true);
+  const [dockerLogOutput, setDockerLogOutput] = useState('');
+
+  // Add VM Form
+  const [nodeName, setNodeName] = useState('');
+  const [nodeUrl, setNodeUrl] = useState('');
+  const [nodeSecret, setNodeSecret] = useState('');
+  const [nodeTags, setNodeTags] = useState('Ubuntu, Docker');
+  const [copiedDeploy, setCopiedDeploy] = useState(false);
+
+  // Broadcast Command State
+  const [broadcastCmd, setBroadcastCmd] = useState('uptime && free -h && df -h /');
+  const [broadcastResults, setBroadcastResults] = useState<any[]>([]);
+  const [broadcasting, setBroadcasting] = useState(false);
+
+  const refreshFleet = async () => {
+    setLoadingFleet(true);
+    try {
+      const res = await fetch('/api/cluster/fleet');
+      const data = await res.json();
+      setFleet(data.fleet || []);
+    } finally {
+      setLoadingFleet(false);
+    }
+  };
+
+  const loadDockerForNode = async (nodeId: string) => {
+    setSelectedDockerNode(nodeId);
+    try {
+      const res = await fetch(`/api/cluster/nodes/${encodeURIComponent(nodeId)}/docker`);
+      const data = await res.json();
+      setDockerAvailable(Boolean(data.available));
+      setDockerContainers(data.containers || []);
+    } catch {
+      setDockerAvailable(false);
+      setDockerContainers([]);
+    }
+  };
+
+  useEffect(() => {
+    refreshFleet();
+    loadDockerForNode('local');
+  }, []);
+
+  const handleAddNode = async (e: React.FormEvent) => {
+    e.preventDefault();
+    if (!nodeUrl.trim()) return;
+    const res = await fetch('/api/cluster/nodes', {
+      method: 'POST',
+      headers: { 'Content-Type': 'application/json' },
+      body: JSON.stringify({
+        name: nodeName.trim() || nodeUrl.trim(),
+        url: nodeUrl.trim(),
+        secret: nodeSecret.trim(),
+        tags: nodeTags.split(',').map((s) => s.trim()).filter(Boolean),
+      }),
+    });
+    const data = await res.json();
+    if (data.ok) {
+      onToast(isVi ? 'Đã thêm VM Node vào cụm!' : 'Added VM Node to cluster!');
+      setAddingOpen(false);
+      setNodeName('');
+      setNodeUrl('');
+      setNodeSecret('');
+      onNodesChanged();
+      refreshFleet();
+    } else {
+      onToast(data.message || 'Failed to add node', 'err');
+    }
+  };
+
+  const handleDeleteNode = async (id: string) => {
+    await fetch(`/api/cluster/nodes/${id}`, { method: 'DELETE' });
+    onToast(isVi ? 'Đã xóa VM Node' : 'Removed VM Node');
+    onNodesChanged();
+    refreshFleet();
+  };
+
+  const handleDockerAction = async (containerId: string, action: 'start' | 'stop' | 'restart' | 'logs') => {
+    const res = await fetch(`/api/cluster/nodes/${encodeURIComponent(selectedDockerNode)}/docker/action`, {
+      method: 'POST',
+      headers: { 'Content-Type': 'application/json' },
+      body: JSON.stringify({ containerId, action }),
+    });
+    const data = await res.json();
+    if (action === 'logs') {
+      setDockerLogOutput(data.output || '(Empty logs)');
+    } else {
+      onToast(data.output || `Docker ${action} done`, data.ok ? 'ok' : 'err');
+      loadDockerForNode(selectedDockerNode);
+    }
+  };
+
+  const handleBroadcast = async (e: React.FormEvent) => {
+    e.preventDefault();
+    if (!broadcastCmd.trim()) return;
+    setBroadcasting(true);
+    try {
+      const res = await fetch('/api/cluster/broadcast', {
+        method: 'POST',
+        headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify({ nodeIds: [], command: broadcastCmd }),
+      });
+      const data = await res.json();
+      setBroadcastResults(data.results || []);
+    } finally {
+      setBroadcasting(false);
+    }
+  };
+
+  const vmDockerDeployCmd = `git clone https://github.com/ngohoang211020/smartmac-agent.git && cd smartmac-agent && SMARTMAC_NODE_SECRET="change-me-secret" docker compose up -d`;
+
+  return (
+    <div className="space-y-5">
+      {/* Header Bar */}
+      <div className="bg-white p-4 rounded-xl border border-slate-200 shadow-2xs flex flex-wrap items-center justify-between gap-3">
+        <div>
+          <div className="flex items-center gap-2">
+            <h3 className="text-sm font-bold text-slate-900">
+              {isVi
+                ? 'Điều Phối Cụm Máy Chủ VM & Docker Fleet (Orchestrator)'
+                : 'Multi-VM Cluster Orchestrator & Docker Fleet'}
+            </h3>
+            <span className="text-[10px] font-bold px-2 py-0.5 rounded-full bg-indigo-50 text-indigo-700 border border-indigo-200">
+              ORCHESTRATOR
+            </span>
+          </div>
+          <p className="text-xs text-slate-500 mt-0.5">
+            {isVi
+              ? 'Cài SmartMac Docker Agent lên nhiều VM, chuyển đổi tab qua lại từng máy ngay trên thanh đầu trang, quản lý Docker và chạy lệnh đồng loạt.'
+              : 'Deploy SmartMac Docker Agent on multiple VMs, switch tabs seamlessly in the top bar, manage remote Docker containers, and broadcast commands.'}
+          </p>
+        </div>
+
+        <div className="flex items-center gap-2">
+          <button
+            onClick={refreshFleet}
+            disabled={loadingFleet}
+            className="flex items-center gap-1.5 px-3.5 py-2 rounded-lg bg-slate-100 hover:bg-slate-200 text-slate-700 text-xs font-semibold cursor-pointer"
+          >
+            <RefreshCw className={`w-3.5 h-3.5 ${loadingFleet ? 'animate-spin' : ''}`} />
+            <span>{isVi ? 'Quét Toàn Bộ Cụm VM' : 'Refresh All VMs'}</span>
+          </button>
+          <button
+            onClick={() => setAddingOpen(!addingOpen)}
+            className="flex items-center gap-1.5 px-4 py-2 rounded-lg bg-[#F26522] hover:bg-orange-600 text-white text-xs font-bold cursor-pointer"
+          >
+            <FolderPlus className="w-3.5 h-3.5" />
+            <span>{isVi ? '+ Kết Nối VM Mới' : '+ Connect New VM'}</span>
+          </button>
+        </div>
+      </div>
+
+      {/* 1-Line Docker Deployment Snippet for Remote VMs */}
+      <div className="p-4 rounded-xl bg-[#1B2537] text-white space-y-2">
+        <div className="flex items-center justify-between text-xs">
+          <span className="font-bold text-amber-300">
+            🐳 {isVi ? 'Cài SmartMac Agent lên mỗi máy chủ VM chỉ bằng 1 dòng lệnh Docker:' : 'Deploy SmartMac Agent on any Linux/Cloud VM with 1 Docker command:'}
+          </span>
+          <button
+            onClick={() => {
+              navigator.clipboard.writeText(vmDockerDeployCmd);
+              setCopiedDeploy(true);
+              setTimeout(() => setCopiedDeploy(false), 2000);
+            }}
+            className="px-2.5 py-1 rounded bg-white/10 hover:bg-white/20 text-white text-[11px] font-semibold flex items-center gap-1 cursor-pointer"
+          >
+            {copiedDeploy ? <Check className="w-3.5 h-3.5 text-emerald-400" /> : <Copy className="w-3.5 h-3.5" />}
+            <span>{copiedDeploy ? 'Copied' : 'Copy Command'}</span>
+          </button>
+        </div>
+        <pre className="p-2.5 rounded-lg bg-slate-950 text-emerald-400 font-mono text-[11px] overflow-x-auto">
+          {vmDockerDeployCmd}
+        </pre>
+      </div>
+
+      {/* Add VM Node Form */}
+      {addingOpen && (
+        <form onSubmit={handleAddNode} className="p-5 rounded-xl bg-white border-2 border-orange-200 shadow-sm space-y-4 text-xs">
+          <h4 className="text-sm font-bold text-slate-900">
+            {isVi ? 'Thêm Máy Chủ VM (Docker Agent Node)' : 'Connect Remote VM Agent Node'}
+          </h4>
+          <div className="grid grid-cols-1 sm:grid-cols-2 md:grid-cols-4 gap-3">
+            <div>
+              <label className="text-[11px] text-slate-500 block mb-1">{isVi ? 'Tên VM' : 'VM Name'}</label>
+              <input
+                type="text"
+                value={nodeName}
+                onChange={(e) => setNodeName(e.target.value)}
+                placeholder="VM-Ubuntu-Prod-01"
+                className="w-full px-3 py-1.5 rounded-lg bg-slate-50 border border-slate-200 text-slate-800"
+              />
+            </div>
+            <div>
+              <label className="text-[11px] text-slate-500 block mb-1">Agent URL *</label>
+              <input
+                type="url"
+                required
+                value={nodeUrl}
+                onChange={(e) => setNodeUrl(e.target.value)}
+                placeholder="http://103.145.67.89:4000"
+                className="w-full px-3 py-1.5 rounded-lg bg-slate-50 border border-slate-200 text-slate-800 font-mono"
+              />
+            </div>
+            <div>
+              <label className="text-[11px] text-slate-500 block mb-1">SMARTMAC_NODE_SECRET *</label>
+              <input
+                type="password"
+                value={nodeSecret}
+                onChange={(e) => setNodeSecret(e.target.value)}
+                placeholder="change-me-secret"
+                className="w-full px-3 py-1.5 rounded-lg bg-slate-50 border border-slate-200 text-slate-800"
+              />
+            </div>
+            <div className="flex items-end gap-2">
+              <button
+                type="submit"
+                className="flex-1 py-1.5 rounded-lg bg-[#F26522] hover:bg-orange-600 text-white font-bold cursor-pointer"
+              >
+                {isVi ? 'Kết Nối VM' : 'Connect VM'}
+              </button>
+              <button
+                type="button"
+                onClick={() => setAddingOpen(false)}
+                className="px-3 py-1.5 rounded-lg bg-slate-100 text-slate-600 font-semibold cursor-pointer"
+              >
+                {isVi ? 'Hủy' : 'Cancel'}
+              </button>
+            </div>
+          </div>
+        </form>
+      )}
+
+      {/* Fleet Health Grid (All Connected VMs) */}
+      <div className="grid grid-cols-1 md:grid-cols-2 xl:grid-cols-3 gap-4">
+        {fleet.length === 0 ? (
+          <div className="col-span-full bg-white rounded-xl border border-dashed border-slate-300 p-8 text-center text-xs text-slate-500">
+            {isVi
+              ? 'Chưa có máy chủ VM nào được thêm. Hãy chạy lệnh Docker phía trên trên VM rồi nhấn "+ Kết Nối VM Mới" để quản lý nhiều máy chủ trên cùng 1 trang web!'
+              : 'No remote VM nodes connected yet. Run the Docker command above on your VMs and click "+ Connect New VM" to orchestrate them here.'}
+          </div>
+        ) : (
+          fleet.map((node) => (
+            <div
+              key={node.nodeId}
+              className={`p-4 rounded-xl bg-white border shadow-2xs space-y-3 ${
+                activeNodeId === node.nodeId ? 'border-2 border-[#F26522]' : 'border-slate-200'
+              }`}
+            >
+              <div className="flex items-start justify-between gap-2">
+                <div className="min-w-0">
+                  <div className="flex items-center gap-2">
+                    <span className={`w-2.5 h-2.5 rounded-full ${node.online ? 'bg-emerald-500 animate-pulse' : 'bg-rose-500'}`} />
+                    <span className="text-sm font-bold text-slate-900 truncate">{node.name}</span>
+                  </div>
+                  <div className="text-[11px] font-mono text-slate-400 truncate mt-0.5">{node.url}</div>
+                </div>
+                <span
+                  className={`text-[10px] font-bold px-2 py-0.5 rounded-full ${
+                    node.online ? 'bg-emerald-50 text-emerald-700' : 'bg-rose-50 text-rose-600'
+                  }`}
+                >
+                  {node.online ? `${node.latencyMs}ms` : 'OFFLINE'}
+                </span>
+              </div>
+
+              {node.online ? (
+                <div className="grid grid-cols-3 gap-2 text-center text-xs">
+                  <div className="p-2 rounded-lg bg-slate-50 border border-slate-200">
+                    <div className="text-[10px] text-slate-400">CPU</div>
+                    <div className="font-extrabold text-slate-900">{node.cpuLoad}%</div>
+                  </div>
+                  <div className="p-2 rounded-lg bg-slate-50 border border-slate-200">
+                    <div className="text-[10px] text-slate-400">RAM</div>
+                    <div className="font-extrabold text-slate-900">{node.ramPercent}%</div>
+                  </div>
+                  <div className="p-2 rounded-lg bg-slate-50 border border-slate-200">
+                    <div className="text-[10px] text-slate-400">Docker</div>
+                    <div className="font-extrabold text-indigo-600">{node.dockerCount ?? 0}</div>
+                  </div>
+                </div>
+              ) : (
+                <div className="p-2.5 rounded-lg bg-rose-50 text-rose-600 text-[11px]">{node.error || 'Unreachable'}</div>
+              )}
+
+              <div className="pt-2 border-t border-slate-100 flex items-center justify-between gap-2">
+                <button
+                  onClick={() => onSwitchNode(node.nodeId)}
+                  className="flex-1 py-1.5 px-3 rounded-lg bg-[#1B2537] hover:bg-slate-800 text-white text-xs font-bold cursor-pointer"
+                >
+                  {isVi ? 'Chuyển sang quản lý VM này →' : 'Switch to this VM →'}
+                </button>
+                <button
+                  onClick={() => loadDockerForNode(node.nodeId)}
+                  className="px-2.5 py-1.5 rounded-lg bg-slate-100 hover:bg-slate-200 text-slate-700 text-xs font-semibold cursor-pointer"
+                >
+                  Docker
+                </button>
+                <button
+                  onClick={() => handleDeleteNode(node.nodeId)}
+                  className="p-1.5 rounded-lg text-rose-500 hover:bg-rose-50 cursor-pointer"
+                >
+                  <Trash2 className="w-3.5 h-3.5" />
+                </button>
+              </div>
+            </div>
+          ))
+        )}
+      </div>
+
+      {/* Bottom Split: Remote Docker Container Manager + Multi-VM Broadcast Runner */}
+      <div className="grid grid-cols-1 lg:grid-cols-12 gap-5">
+        {/* Docker Containers Panel */}
+        <div className="lg:col-span-7 bg-white rounded-xl border border-slate-200 shadow-2xs p-5 space-y-3">
+          <div className="flex flex-wrap items-center justify-between gap-2">
+            <div>
+              <h4 className="text-sm font-bold text-slate-900">
+                🐳 {isVi ? 'Quản Lý Docker Containers' : 'Docker Container Manager'} ({selectedDockerNode === 'local' ? 'Local' : selectedDockerNode})
+              </h4>
+            </div>
+            <div className="flex items-center gap-1.5">
+              <button
+                onClick={() => loadDockerForNode('local')}
+                className={`px-2.5 py-1 rounded-lg text-xs font-semibold cursor-pointer ${
+                  selectedDockerNode === 'local' ? 'bg-[#F26522] text-white' : 'bg-slate-100 text-slate-600'
+                }`}
+              >
+                Local
+              </button>
+              {fleet.map((n) => (
+                <button
+                  key={n.nodeId}
+                  onClick={() => loadDockerForNode(n.nodeId)}
+                  className={`px-2.5 py-1 rounded-lg text-xs font-semibold cursor-pointer ${
+                    selectedDockerNode === n.nodeId ? 'bg-[#F26522] text-white' : 'bg-slate-100 text-slate-600'
+                  }`}
+                >
+                  {n.name}
+                </button>
+              ))}
+            </div>
+          </div>
+
+          {!dockerAvailable ? (
+            <div className="p-6 text-center text-xs text-slate-400 bg-slate-50 rounded-xl border border-dashed border-slate-200">
+              {isVi ? 'Docker chưa chạy hoặc chưa được cài trên máy chủ này.' : 'Docker daemon not running or not mounted on this node.'}
+            </div>
+          ) : dockerContainers.length === 0 ? (
+            <div className="p-6 text-center text-xs text-slate-400 bg-slate-50 rounded-xl border border-dashed border-slate-200">
+              {isVi ? 'Không có container nào.' : 'No containers found.'}
+            </div>
+          ) : (
+            <div className="divide-y divide-slate-100 border border-slate-200 rounded-xl overflow-hidden max-h-64 overflow-y-auto text-xs">
+              {dockerContainers.map((c) => (
+                <div key={c.id} className="p-3 flex items-center justify-between gap-2 hover:bg-slate-50">
+                  <div className="min-w-0">
+                    <div className="flex items-center gap-2">
+                      <span className={`w-2 h-2 rounded-full ${c.state === 'running' ? 'bg-emerald-500' : 'bg-slate-400'}`} />
+                      <span className="font-bold text-slate-900 truncate">{c.name}</span>
+                      <span className="text-[10px] font-mono text-slate-400 truncate">{c.image}</span>
+                    </div>
+                    <div className="text-[11px] text-slate-500 truncate mt-0.5">{c.status}</div>
+                  </div>
+                  <div className="flex items-center gap-1 shrink-0">
+                    <button
+                      onClick={() => handleDockerAction(c.id, c.state === 'running' ? 'restart' : 'start')}
+                      className="px-2 py-1 rounded bg-emerald-50 hover:bg-emerald-100 text-emerald-700 font-semibold cursor-pointer"
+                    >
+                      {c.state === 'running' ? 'Restart' : 'Start'}
+                    </button>
+                    {c.state === 'running' && (
+                      <button
+                        onClick={() => handleDockerAction(c.id, 'stop')}
+                        className="px-2 py-1 rounded bg-rose-50 hover:bg-rose-100 text-rose-600 font-semibold cursor-pointer"
+                      >
+                        Stop
+                      </button>
+                    )}
+                    <button
+                      onClick={() => handleDockerAction(c.id, 'logs')}
+                      className="px-2 py-1 rounded bg-slate-100 hover:bg-slate-200 text-slate-700 font-semibold cursor-pointer"
+                    >
+                      Logs
+                    </button>
+                  </div>
+                </div>
+              ))}
+            </div>
+          )}
+
+          {dockerLogOutput && (
+            <pre className="p-3 rounded-lg bg-slate-950 text-emerald-400 font-mono text-[11px] max-h-40 overflow-auto">
+              {dockerLogOutput}
+            </pre>
+          )}
+        </div>
+
+        {/* Multi-VM Broadcast Command Panel */}
+        <div className="lg:col-span-5 bg-white rounded-xl border border-slate-200 shadow-2xs p-5 space-y-3 flex flex-col">
+          <h4 className="text-sm font-bold text-slate-900">
+            ⚡ {isVi ? 'Chạy Lệnh Đồng Loạt Trên Tất Cả VM (Broadcast)' : 'Multi-VM Broadcast Command'}
+          </h4>
+          <form onSubmit={handleBroadcast} className="flex gap-2">
+            <input
+              type="text"
+              value={broadcastCmd}
+              onChange={(e) => setBroadcastCmd(e.target.value)}
+              placeholder="uptime && free -h"
+              className="flex-1 px-3 py-1.5 rounded-lg bg-slate-50 border border-slate-200 font-mono text-xs text-slate-800"
+            />
+            <button
+              type="submit"
+              disabled={broadcasting || fleet.length === 0}
+              className="px-3.5 py-1.5 rounded-lg bg-[#F26522] hover:bg-orange-600 text-white text-xs font-bold cursor-pointer disabled:opacity-50"
+            >
+              {broadcasting ? '...' : isVi ? 'Chạy Tất Cả' : 'Run All'}
+            </button>
+          </form>
+
+          <div className="flex-1 space-y-2 max-h-64 overflow-y-auto">
+            {broadcastResults.map((r) => (
+              <div key={r.nodeId} className="rounded-lg border border-slate-200 overflow-hidden text-xs">
+                <div className="px-3 py-1.5 bg-slate-50 flex items-center justify-between font-bold">
+                  <span className={r.ok ? 'text-emerald-700' : 'text-rose-600'}>
+                    {r.ok ? '✓' : '✗'} {r.name}
+                  </span>
+                  <span className="text-[10px] text-slate-400">{r.durationMs}ms</span>
+                </div>
+                <pre className="p-2.5 bg-slate-950 text-emerald-300 font-mono text-[11px] overflow-x-auto">
+                  {r.output}
+                </pre>
+              </div>
+            ))}
+          </div>
         </div>
       </div>
     </div>

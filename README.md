@@ -113,7 +113,26 @@ npm start
 
 ---
 
-## 5. Hướng dẫn kết nối Gmail qua Google OAuth 2.0 (Từng bước)
+## 🐳 5. Chạy qua Docker & Quản lý Cụm Nhiều Máy Chủ VM (Orchestrator)
+
+Bạn có thể cài **SmartMac bằng Docker** lên nhiều máy chủ VM (Ubuntu, Debian, CentOS, Cloud VPS...) và dùng **duy nhất 1 trang Web Master** để chuyển tab qua lại giữa từng VM, xem sức khỏe toàn bộ cụm máy chủ, quản lý Docker Containers từ xa và chạy lệnh đồng loạt!
+
+### Bước 1: Trên mỗi máy chủ VM muốn quản lý (Chạy bằng Docker)
+```bash
+git clone https://github.com/ngohoang211020/smartmac-agent.git
+cd smartmac-agent
+SMARTMAC_NODE_SECRET="mat-khau-bi-mat-cua-ban" docker compose up -d
+```
+*(Lệnh này tự động mở cổng `4000`, mount `/var/run/docker.sock` để quản lý Docker của VM đó, và bảo vệ VM bằng mã `SMARTMAC_NODE_SECRET`.)*
+
+### Bước 2: Kết nối & chuyển tab qua lại giữa các VM trên Web Master
+1. Mở giao diện Web SmartMac chính (trên MacBook hoặc trên 1 VPS Master).
+2. Vào menu **Cloud, Gmail & VPS → Cụm Máy Chủ VM (Orchestrator)** → nhấn **`+ Kết Nối VM Mới`** → nhập Tên VM, địa chỉ `http://<IP-VM>:4000` và mã `SMARTMAC_NODE_SECRET`.
+3. Ngay trên **thanh chuyển đổi máy chủ (`MÁY CHỦ ĐANG CHỌN`) ở đầu trang**, bạn có thể **chuyển tab qua lại giữa `Local (Máy này)` ↔ `VM-01` ↔ `VM-02`** chỉ bằng 1 click — toàn bộ giao diện (CPU/RAM/Disk, Tiến trình, Files, Mạng, AI Agent) sẽ tự động điều khiển đúng VM đang chọn!
+
+---
+
+## 6. Hướng dẫn kết nối Gmail qua Google OAuth 2.0 (Từng bước)
 
 Tính năng này giúp bạn đọc hộp thư Gmail, gửi email nhanh và nhận thông báo **email chưa đọc trong 3 ngày gần nhất** ở biểu tượng **Chuông (`🔔`)** trên thanh tiêu đề:
 

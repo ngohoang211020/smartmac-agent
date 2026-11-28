@@ -3,14 +3,18 @@ import ReactDOM from 'react-dom/client';
 import App from './App';
 import './index.css';
 
-// Automatically attach local Admin Session Token (if set) to all /api/* requests
+// Automatically attach local Admin Session Token and active Target VM Node ID (`x-target-node`) to all /api/* requests
 const originalFetch = window.fetch.bind(window);
 window.fetch = (input: RequestInfo | URL, init?: RequestInit) => {
   const token = localStorage.getItem('smartmac_sec_token');
-  if (token) {
+  const activeNode = localStorage.getItem('smartmac_active_node');
+  if (token || (activeNode && activeNode !== 'local')) {
     const headers = new Headers(init?.headers || {});
-    if (!headers.has('x-smartmac-token')) {
+    if (token && !headers.has('x-smartmac-token')) {
       headers.set('x-smartmac-token', token);
+    }
+    if (activeNode && activeNode !== 'local' && !headers.has('x-target-node')) {
+      headers.set('x-target-node', activeNode);
     }
     return originalFetch(input, { ...init, headers });
   }
@@ -22,4 +26,3 @@ ReactDOM.createRoot(document.getElementById('root')!).render(
     <App />
   </React.StrictMode>
 );
-

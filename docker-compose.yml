@@ -1,0 +1,20 @@
+services:
+  smartmac:
+    build: .
+    container_name: smartmac-agent
+    restart: unless-stopped
+    ports:
+      - "${PORT:-4000}:4000"
+    environment:
+      - PORT=4000
+      - HOST=0.0.0.0
+      - SMARTMAC_DATA_DIR=/app/data
+      # Set a strong secret token when running this container as a Worker VM Agent Node:
+      - SMARTMAC_NODE_SECRET=${SMARTMAC_NODE_SECRET:-}
+    volumes:
+      # Persist your connected VMs, Admin PIN, and settings
+      - ./smartmac-data:/app/data
+      # Mount host Docker socket to manage Docker containers on this VM from the Web UI
+      - /var/run/docker.sock:/var/run/docker.sock
+      # Optional: Mount host SSH keys (read-only) for VPS SSH access
+      - ${HOME}/.ssh:/root/.ssh:ro

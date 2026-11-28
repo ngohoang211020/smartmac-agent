@@ -4561,6 +4561,80 @@ function CamerasMonitorTab({
   const [discovered, setDiscovered] = useState<Array<{ ip: string; port: number }>>([]);
   const [discoveredSubnet, setDiscoveredSubnet] = useState('');
 
+  // Embedded Live App Window Streams (ImouLife HD & Tapo mirrored directly inside the Web UI)
+  const [embeddedWindows, setEmbeddedWindows] = useState<
+    Array<{ id: string; label: string; brand: 'imou' | 'tapo'; stream: MediaStream }>
+  >([]);
+
+  const handleEmbedNativeWindow = async (label: string, brand: 'imou' | 'tapo', appPath: string) => {
+    // 1. Launch / bring the macOS app to front first so it appears in the window picker
+    await fetch('/api/apps/launch', {
+      method: 'POST',
+      headers: { 'Content-Type': 'application/json' },
+      body: JSON.stringify({ appNameOrPath: appPath }),
+    }).catch(() => {});
+
+    try {
+      const stream = await navigator.mediaDevices.getDisplayMedia({
+        video: { frameRate: 24 },
+        audio: false,
+      });
+      const id = `win-${brand}-${Date.now()}`;
+      stream.getVideoTracks()[0].onended = () => {
+        setEmbeddedWindows((prev) => prev.filter((w) => w.id !== id));
+      };
+      setEmbeddedWindows((prev) => [...prev, { id, label, brand, stream }]);
+      onToast(
+        isVi
+          ? `Đã nhúng trực tiếp luồng ${label} vào giao diện web!`
+          : `Embedded live ${label} window into SmartMac web dashboard!`
+      );
+    } catch (err: any) {
+      onToast(
+        isVi ? 'Đã hủy chọn cửa sổ để nhúng vào web' : err.message || 'Window embed cancelled',
+        'err'
+      );
+    }
+  };
+
+  const handleStopEmbeddedWindow = (id: string) => {
+    setEmbeddedWindows((prev) => {
+      const target = prev.find((w) => w.id === id);
+      target?.stream.getTracks().forEach((tr) => tr.stop());
+      return prev.filter((w) => w.id !== id);
+    });
+  };
+
+  const handleSnapshotEmbeddedVideo = async (label: string, stream: MediaStream) => {
+    try {
+      const video = document.createElement('video');
+      video.srcObject = stream;
+      video.muted = true;
+      await video.play();
+      const canvas = document.createElement('canvas');
+      canvas.width = video.videoWidth || 1280;
+      canvas.height = video.videoHeight || 720;
+      canvas.getContext('2d')?.drawImage(video, 0, 0, canvas.width, canvas.height);
+      const base64Data = canvas.toDataURL('image/png');
+      const filename = `Cam_${label.replace(/[^a-zA-Z0-9_-]/g, '_')}_${new Date().toISOString().replace(/[:.]/g, '-')}.png`;
+      const res = await fetch('/api/media/save', {
+        method: 'POST',
+        headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify({ filename, base64Data, type: 'screenshot' }),
+      });
+      const data = await res.json();
+      onToast(data.message, data.ok ? 'ok' : 'err');
+    } catch (err: any) {
+      onToast(err.message, 'err');
+    }
+  };
+
+  useEffect(() => {
+    return () => {
+      embeddedWindows.forEach((w) => w.stream.getTracks().forEach((tr) => tr.stop()));
+    };
+  }, []);
+
   // Add Camera Form
   const [brand, setBrand] = useState<'tapo' | 'imou' | 'custom'>('tapo');
   const [name, setName] = useState('');
@@ -4778,6 +4852,24 @@ function CamerasMonitorTab({
 
             <div className="flex items-center gap-1.5 shrink-0">
               <button
+                onClick={() =>
+                  handleEmbedNativeWindow(
+                    nativeApp.label,
+                    nativeApp.accent === 'orange' ? 'imou' : 'tapo',
+                    nativeApp.appPath
+                  )
+                }
+                className="px-3 py-1.5 rounded-lg bg-[#F26522] hover:bg-orange-600 text-white text-xs font-bold flex items-center gap-1.5 cursor-pointer"
+                title={
+                  isVi
+                    ? `Nhúng trực tiếp cửa sổ ${nativeApp.label} để xem ngay trên web`
+                    : `Embed ${nativeApp.label} live view directly in this web dashboard`
+                }
+              >
+                <Video className="w-3.5 h-3.5" />
+                <span>{isVi ? 'Xem Trên Web' : 'Watch in Web'}</span>
+              </button>
+              <button
                 onClick={async () => {
                   const res = await fetch('/api/apps/launch', {
                     method: 'POST',
@@ -4794,10 +4886,10 @@ function CamerasMonitorTab({
                   }
                   onToast(data.ok ? (isVi ? `Đã mở ${nativeApp.label}` : data.message) : data.message, data.ok ? 'ok' : 'err');
                 }}
-                className="px-3 py-1.5 rounded-lg bg-[#F26522] hover:bg-orange-600 text-white text-xs font-bold flex items-center gap-1.5 cursor-pointer"
+                className="p-2 rounded-lg bg-emerald-50 hover:bg-emerald-100 text-emerald-700 border border-emerald-200 transition cursor-pointer"
+                title={isVi ? `Mở cửa sổ ${nativeApp.label}` : `Open ${nativeApp.label}`}
               >
                 <Play className="w-3.5 h-3.5" />
-                <span>{isVi ? 'Mở App' : 'Open'}</span>
               </button>
               <button
                 onClick={async () => {
@@ -4818,6 +4910,25 @@ function CamerasMonitorTab({
           </div>
         ))}
       </div>
+
+      {/* Live Embedded ImouLife HD / Tapo Web Feeds */}
+      {embeddedWindows.length > 0 && (
+        <div
+          className={`grid gap-4 ${
+            gridCols === 1 ? 'grid-cols-1' : gridCols === 3 ? 'grid-cols-1 md:grid-cols-2 xl:grid-cols-3' : 'grid-cols-1 lg:grid-cols-2'
+          }`}
+        >
+          {embeddedWindows.map((win) => (
+            <EmbeddedCameraCard
+              key={win.id}
+              item={win}
+              isVi={isVi}
+              onSnapshot={() => handleSnapshotEmbeddedVideo(win.label, win.stream)}
+              onStop={() => handleStopEmbeddedWindow(win.id)}
+            />
+          ))}
+        </div>
+      )}
 
       {/* Discovered LAN RTSP Devices Banner */}
       {discovered.length > 0 && (
@@ -5129,6 +5240,68 @@ function CamerasMonitorTab({
           })}
         </div>
       )}
+    </div>
+  );
+}
+
+function EmbeddedCameraCard({
+  item,
+  isVi,
+  onSnapshot,
+  onStop,
+}: {
+  item: { id: string; label: string; brand: 'imou' | 'tapo'; stream: MediaStream };
+  isVi: boolean;
+  onSnapshot: () => void;
+  onStop: () => void;
+}) {
+  const videoRef = useRef<HTMLVideoElement | null>(null);
+
+  useEffect(() => {
+    if (videoRef.current) {
+      videoRef.current.srcObject = item.stream;
+      videoRef.current.play().catch(() => {});
+    }
+  }, [item.stream]);
+
+  return (
+    <div className="bg-white rounded-xl border-2 border-orange-200 shadow-sm overflow-hidden flex flex-col">
+      <div className="relative aspect-video bg-slate-950 flex items-center justify-center overflow-hidden">
+        <video ref={videoRef} autoPlay muted playsInline className="w-full h-full object-contain" />
+        <div className="absolute top-2.5 left-2.5 flex items-center gap-1.5">
+          <span className="px-2 py-0.5 rounded bg-black/75 text-white text-[10px] font-bold uppercase">
+            {item.brand === 'imou' ? 'IMOU CLOUD' : 'TAPO CLOUD'}
+          </span>
+          <span className="px-2 py-0.5 rounded bg-rose-600 text-white text-[10px] font-bold flex items-center gap-1">
+            <span className="w-1.5 h-1.5 rounded-full bg-white animate-pulse" />
+            LIVE WEB EMBED
+          </span>
+        </div>
+      </div>
+
+      <div className="p-3.5 flex items-center justify-between gap-2 bg-white border-t border-slate-100">
+        <div>
+          <div className="text-xs font-bold text-slate-900">{item.label}</div>
+          <div className="text-[11px] text-emerald-600 font-medium">
+            {isVi ? 'Đang phát trực tiếp trên Web SmartMac' : 'Streaming live inside SmartMac Web'}
+          </div>
+        </div>
+        <div className="flex items-center gap-1.5">
+          <button
+            onClick={onSnapshot}
+            className="px-2.5 py-1.5 rounded-lg bg-slate-100 hover:bg-slate-200 text-slate-700 text-xs font-semibold flex items-center gap-1 cursor-pointer"
+          >
+            <Camera className="w-3.5 h-3.5" />
+            <span>{isVi ? 'Chụp ảnh' : 'Snapshot'}</span>
+          </button>
+          <button
+            onClick={onStop}
+            className="px-2.5 py-1.5 rounded-lg bg-rose-50 hover:bg-rose-100 text-rose-600 border border-rose-200 text-xs font-bold cursor-pointer"
+          >
+            {isVi ? 'Đóng' : 'Stop'}
+          </button>
+        </div>
+      </div>
     </div>
   );
 }

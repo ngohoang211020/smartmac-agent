@@ -474,6 +474,9 @@ export async function openExternalWebApp(target: string): Promise<{ ok: boolean;
     gmail_compose: 'https://mail.google.com/mail/?view=cm&fs=1',
     google_console: 'https://console.cloud.google.com/apis/credentials',
     oauth_playground: 'https://developers.google.com/oauthplayground',
+    imou_cloud: 'https://www.imoulife.com/en/support/download',
+    imou_web: 'https://openapi.easy4ip.com/',
+    tapo_web: 'https://www.tapo.com/',
   };
   const url = urls[target] || target;
   if (!url.startsWith('https://')) {

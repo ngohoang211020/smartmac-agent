@@ -1,10 +1,12 @@
 import si from 'systeminformation';
-import { exec } from 'child_process';
+import { exec, execFile } from 'child_process';
 import { promisify } from 'util';
+import fs from 'fs';
 import os from 'os';
 import dns from 'dns';
 
 const execAsync = promisify(exec);
+const execFileAsync = promisify(execFile);
 
 export interface NetworkOverview {
   wifi: {
@@ -18,7 +20,9 @@ export interface NetworkOverview {
     security: string | null;
     txRate: number | null;
     interfaceName: string;
+    redacted?: boolean;
   };
+  savedWifiNetworks: string[];
   interfaces: Array<{
     iface: string;
     ifaceName: string;
@@ -45,25 +49,93 @@ export interface NetworkOverview {
   }>;
 }
 
-export async function getPlatformWifiSSID(iface = 'en0'): Promise<{ ssid: string | null; enabled: boolean }> {
+export interface ScannedWifiNetwork {
+  ssid: string;
+  bssid: string;
+  channel: number;
+  signalLevel: number;
+  quality: number;
+  security: string;
+  isRedacted?: boolean;
+}
+
+function isRedactedSsid(ssid: string | null | undefined): boolean {
+  if (!ssid) return true;
+  const s = ssid.trim().toLowerCase();
+  return s === '' || s === '<redacted>' || s === 'redacted';
+}
+
+function findSmartMacAppBinary(): string | null {
+  if (os.platform() !== 'darwin') return null;
+  const candidates = [
+    process.env.SMARTMAC_APP_BIN || '',
+    '/Applications/SmartMac.app/Contents/MacOS/SmartMac',
+    `${os.homedir()}/Applications/SmartMac.app/Contents/MacOS/SmartMac`,
+  ].filter(Boolean);
+  for (const p of candidates) {
+    if (fs.existsSync(p)) return p;
+  }
+  return null;
+}
+
+async function runCoreWlanHelper(): Promise<{
+  locationAuthorized: boolean;
+  current: { ssid: string | null; bssid: string | null; channel: number | null; rssi: number | null; txRate: number | null; interfaceName: string } | null;
+  networks: ScannedWifiNetwork[];
+} | null> {
+  const bin = findSmartMacAppBinary();
+  if (!bin) return null;
+  try {
+    const { stdout } = await execFileAsync(bin, ['--wifi-json'], { timeout: 10000 });
+    return JSON.parse(stdout);
+  } catch {
+    return null;
+  }
+}
+
+export async function getSavedWifiNetworks(iface = 'en0'): Promise<string[]> {
+  if (os.platform() !== 'darwin') return [];
+  try {
+    const { stdout } = await execFileAsync('networksetup', ['-listpreferredwirelessnetworks', iface], { timeout: 5000 });
+    return stdout
+      .split('\n')
+      .slice(1)
+      .map((line) => line.trim())
+      .filter((line) => line.length > 0 && !isRedactedSsid(line));
+  } catch {
+    return [];
+  }
+}
+
+export async function getPlatformWifiSSID(iface = 'en0'): Promise<{ ssid: string | null; enabled: boolean; redacted?: boolean }> {
   const platform = os.platform();
   try {
     if (platform === 'darwin') {
       const { stdout: pwrOut } = await execAsync(`networksetup -getairportpower ${iface} 2>/dev/null || echo ""`);
       const enabled = !pwrOut.toLowerCase().includes('off');
 
-      const { stdout } = await execAsync(`networksetup -getairportnetwork ${iface} 2>/dev/null || echo ""`);
-      const match = stdout.match(/Current Wi-Fi Network:\s*(.+)/i);
-      if (match && match[1]) {
-        return { ssid: match[1].trim(), enabled };
+      // 1. Try CoreWLAN via SmartMac.app first (returns real SSID if Location Services is enabled)
+      const cw = await runCoreWlanHelper();
+      if (cw?.current?.ssid && !isRedactedSsid(cw.current.ssid)) {
+        return { ssid: cw.current.ssid, enabled, redacted: false };
       }
 
+      // 2. Try networksetup
+      const { stdout } = await execAsync(`networksetup -getairportnetwork ${iface} 2>/dev/null || echo ""`);
+      const match = stdout.match(/Current Wi-Fi Network:\s*(.+)/i);
+      if (match && match[1] && !isRedactedSsid(match[1])) {
+        return { ssid: match[1].trim(), enabled, redacted: false };
+      }
+
+      // 3. Fallback to ipconfig getsummary
       const { stdout: summary } = await execAsync(`ipconfig getsummary ${iface} 2>/dev/null || echo ""`);
       const ssidMatch = summary.match(/\bSSID\s*:\s*(.+)/);
-      return {
-        ssid: ssidMatch ? ssidMatch[1].trim() : null,
-        enabled,
-      };
+      const rawSsid = ssidMatch ? ssidMatch[1].trim() : null;
+      if (rawSsid && !isRedactedSsid(rawSsid)) {
+        return { ssid: rawSsid, enabled, redacted: false };
+      }
+
+      return { ssid: null, enabled, redacted: enabled };
     } else if (platform === 'win32') {
       const { stdout } = await execAsync('netsh wlan show interfaces');
       const stateMatch = stdout.match(/State\s*:\s*(.+)/i);
@@ -106,13 +178,14 @@ export async function getDnsServers(): Promise<string[]> {
 }
 
 export async function getNetworkOverview(): Promise<NetworkOverview> {
-  const [ifaces, wifiConnections, gateway, connections, platformWifi, dnsServers] = await Promise.all([
+  const [ifaces, wifiConnections, gateway, connections, platformWifi, dnsServers, savedWifiNetworks] = await Promise.all([
     si.networkInterfaces().catch(() => []),
     si.wifiConnections().catch(() => []),
     si.networkGatewayDefault().catch(() => ''),
     si.networkConnections().catch(() => []),
     getPlatformWifiSSID('en0'),
     getDnsServers(),
+    getSavedWifiNetworks('en0'),
   ]);
 
   const ifaceList = Array.isArray(ifaces) ? ifaces : [ifaces];
@@ -132,11 +205,23 @@ export async function getNetworkOverview(): Promise<NetworkOverview> {
       process: c.process || '',
     }));
 
+  const rawPrimarySsid = primaryWifi?.ssid;
+  const resolvedSsid =
+    (!isRedactedSsid(platformWifi.ssid) ? platformWifi.ssid : null) ||
+    (!isRedactedSsid(rawPrimarySsid) ? rawPrimarySsid : null) ||
+    (platformWifi.enabled ? (savedWifiNetworks[0] ? `${savedWifiNetworks[0]} (Saved)` : 'Connected (SSID hidden by macOS)') : null);
+
+  const redacted =
+    os.platform() === 'darwin' &&
+    platformWifi.enabled &&
+    isRedactedSsid(platformWifi.ssid) &&
+    isRedactedSsid(rawPrimarySsid);
+
   return {
     wifi: {
       enabled: platformWifi.enabled,
-      ssid: primaryWifi?.ssid || platformWifi.ssid || (platformWifi.enabled ? 'Connected (Wi-Fi)' : null),
-      bssid: primaryWifi?.bssid || null,
+      ssid: resolvedSsid,
+      bssid: !isRedactedSsid(primaryWifi?.bssid) ? primaryWifi?.bssid || null : null,
       channel: primaryWifi?.channel || null,
       frequency: primaryWifi?.frequency || null,
       signalLevel: primaryWifi?.signalLevel || null,
@@ -144,7 +229,9 @@ export async function getNetworkOverview(): Promise<NetworkOverview> {
       security: primaryWifi?.security ? String(primaryWifi.security) : 'WPA2/WPA3',
       txRate: primaryWifi?.txRate || null,
       interfaceName: primaryWifi?.iface || (os.platform() === 'win32' ? 'Wi-Fi' : 'en0'),
+      redacted,
     },
+    savedWifiNetworks,
     interfaces: ifaceList
       .filter((i) => i.ip4 || i.ip6 || !i.internal)
       .map((i) => ({
@@ -165,30 +252,95 @@ export async function getNetworkOverview(): Promise<NetworkOverview> {
   };
 }
 
-export async function scanWifiNetworks(): Promise<
-  Array<{
-    ssid: string;
-    bssid: string;
-    channel: number;
-    signalLevel: number;
-    quality: number;
-    security: string;
-  }>
-> {
+export async function scanWifiNetworks(): Promise<{
+  networks: ScannedWifiNetwork[];
+  savedNetworks: string[];
+  redactedByMacOS: boolean;
+  locationAuthorized: boolean;
+}> {
+  const savedNetworks = await getSavedWifiNetworks('en0');
+
+  // 1. On macOS, prefer CoreWLAN via SmartMac.app (returns real SSIDs when Location Services is enabled)
+  if (os.platform() === 'darwin') {
+    const cw = await runCoreWlanHelper();
+    if (cw && cw.networks.length > 0 && cw.networks.some((n) => !isRedactedSsid(n.ssid))) {
+      return {
+        networks: cw.networks,
+        savedNetworks,
+        redactedByMacOS: false,
+        locationAuthorized: cw.locationAuthorized,
+      };
+    }
+  }
+
+  // 2. Fallback to systeminformation.wifiNetworks()
   try {
     const nets = await si.wifiNetworks();
-    return nets
+    const mapped: ScannedWifiNetwork[] = nets
       .filter((n) => n.ssid)
-      .map((n) => ({
-        ssid: n.ssid,
-        bssid: n.bssid,
-        channel: n.channel,
-        signalLevel: n.signalLevel,
-        quality: n.quality,
-        security: Array.isArray(n.security) ? n.security.join(', ') : String(n.security || 'Open'),
-      }));
+      .map((n, idx) => {
+        const isRed = isRedactedSsid(n.ssid);
+        return {
+          ssid: isRed ? `Wi-Fi Signal #${idx + 1} (Ch ${n.channel || '?'})` : n.ssid,
+          bssid: n.bssid || '',
+          channel: n.channel,
+          signalLevel: n.signalLevel,
+          quality: n.quality,
+          security: Array.isArray(n.security) ? n.security.join(', ') : String(n.security || 'WPA2/WPA3'),
+          isRedacted: isRed,
+        };
+      })
+      .sort((a, b) => (b.signalLevel || -100) - (a.signalLevel || -100));
+
+    const allRedacted = mapped.length > 0 && mapped.every((n) => n.isRedacted);
+    return {
+      networks: mapped,
+      savedNetworks,
+      redactedByMacOS: os.platform() === 'darwin' && (allRedacted || mapped.length === 0),
+      locationAuthorized: !allRedacted,
+    };
   } catch {
-    return [];
+    return {
+      networks: [],
+      savedNetworks,
+      redactedByMacOS: os.platform() === 'darwin',
+      locationAuthorized: false,
+    };
+  }
+}
+
+export async function openMacLocationSettings(): Promise<{ ok: boolean; message: string }> {
+  if (os.platform() !== 'darwin') {
+    return { ok: false, message: 'Only applicable on macOS' };
+  }
+  try {
+    await execFileAsync('open', ['x-apple.systempreferences:com.apple.preference.security?Privacy_LocationServices']);
+    return { ok: true, message: 'Opened macOS Location Services Settings. Enable SmartMac to reveal Wi-Fi names.' };
+  } catch (err: any) {
+    return { ok: false, message: err.message };
+  }
+}
+
+export async function connectToWifiNetwork(ssid: string, password?: string, iface = 'en0'): Promise<{ ok: boolean; message: string }> {
+  const safeSsid = (ssid || '').trim();
+  if (!safeSsid) return { ok: false, message: 'SSID is required' };
+  try {
+    if (os.platform() === 'darwin') {
+      const args = ['-setairportnetwork', iface, safeSsid];
+      if (password) args.push(password);
+      await execFileAsync('networksetup', args, { timeout: 15000 });
+      return { ok: true, message: `Connected to Wi-Fi "${safeSsid}"` };
+    } else if (os.platform() === 'win32') {
+      await execFileAsync('netsh', ['wlan', 'connect', `name=${safeSsid}`], { timeout: 15000 });
+      return { ok: true, message: `Connecting to Wi-Fi "${safeSsid}"` };
+    } else {
+      const args = ['dev', 'wifi', 'connect', safeSsid];
+      if (password) args.push('password', password);
+      await execFileAsync('nmcli', args, { timeout: 15000 });
+      return { ok: true, message: `Connected to Wi-Fi "${safeSsid}"` };
+    }
+  } catch (err: any) {
+    return { ok: false, message: `Failed to connect to "${safeSsid}": ${err.stderr || err.message}` };
   }
 }
 

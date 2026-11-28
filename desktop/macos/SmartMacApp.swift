@@ -2,18 +2,88 @@
 // - Spawns the bundled Node.js server (dist-server/index.js) in the background
 // - Renders the dashboard inside a native WKWebView window
 // - Lives in the menu bar; closing the window keeps the agent running
+// - Provides a CoreWLAN + CoreLocation Wi-Fi scanner helper (--wifi-json) so macOS returns real SSIDs
 // - "Launch at Login" toggle writes ~/Library/LaunchAgents/com.smartmac.agent.plist
 
 import Cocoa
 import WebKit
+import CoreLocation
+import CoreWLAN
 
-final class AppDelegate: NSObject, NSApplicationDelegate, NSWindowDelegate, WKNavigationDelegate, WKUIDelegate {
+// MARK: - CLI Helper Mode: SmartMac --wifi-json (runs inside the signed .app bundle to access CoreWLAN SSIDs)
+func runWifiJsonHelper() {
+    let client = CWWiFiClient.shared()
+    guard let iface = client.interface() else {
+        print("{\"error\":\"No Wi-Fi interface found\",\"current\":null,\"networks\":[]}")
+        exit(0)
+    }
+
+    let locStatus = CLLocationManager().authorizationStatus
+    let locationAuthorized = (locStatus == .authorizedAlways || locStatus == .authorized)
+
+    let currentSsid = iface.ssid()
+    var scannedList: [[String: Any]] = []
+
+    if let networks = try? iface.scanForNetworks(withName: nil) {
+        var seen = Set<String>()
+        let sorted = networks.sorted { $0.rssiValue > $1.rssiValue }
+        for net in sorted {
+            let ssid = net.ssid ?? ""
+            if ssid.isEmpty { continue }
+            if seen.contains(ssid) { continue }
+            seen.insert(ssid)
+
+            let ch = net.wlanChannel?.channelNumber ?? 0
+            let sec = net.supportsSecurity(.wpa3Personal) ? "WPA3" :
+                      net.supportsSecurity(.wpa2Personal) ? "WPA2" :
+                      net.supportsSecurity(.wpaPersonal) ? "WPA" :
+                      net.supportsSecurity(.none) ? "Open" : "Secured"
+
+            scannedList.append([
+                "ssid": ssid,
+                "bssid": net.bssid ?? "",
+                "channel": ch,
+                "signalLevel": net.rssiValue,
+                "quality": max(0, min(100, 2 * (net.rssiValue + 100))),
+                "security": sec,
+            ])
+        }
+    }
+
+    let payload: [String: Any] = [
+        "locationAuthorized": locationAuthorized,
+        "current": [
+            "ssid": currentSsid ?? NSNull(),
+            "bssid": iface.bssid() ?? NSNull(),
+            "channel": iface.wlanChannel()?.channelNumber ?? NSNull(),
+            "rssi": iface.rssiValue(),
+            "txRate": iface.transmitRate(),
+            "interfaceName": iface.interfaceName ?? "en0",
+        ],
+        "networks": scannedList,
+    ]
+
+    if let data = try? JSONSerialization.data(withJSONObject: payload, options: []),
+       let json = String(data: data, encoding: .utf8) {
+        print(json)
+    } else {
+        print("{\"locationAuthorized\":false,\"current\":null,\"networks\":[]}")
+    }
+    exit(0)
+}
+
+if CommandLine.arguments.contains("--wifi-json") {
+    runWifiJsonHelper()
+}
+
+final class AppDelegate: NSObject, NSApplicationDelegate, NSWindowDelegate, WKNavigationDelegate, WKUIDelegate, CLLocationManagerDelegate {
     private var window: NSWindow!
     private var webView: WKWebView!
     private var statusItem: NSStatusItem!
     private var loginItem: NSMenuItem!
     private var serverProcess: Process?
     private var dashboardLoaded = false
+    private let locationManager = CLLocationManager()
 
     private let port: Int = {
         if let raw = Bundle.main.object(forInfoDictionaryKey: "SMPort") as? String, let value = Int(raw) {
@@ -37,6 +107,16 @@ final class AppDelegate: NSObject, NSApplicationDelegate, NSWindowDelegate, WKNa
 
     func applicationDidFinishLaunching(_ notification: Notification) {
         let startHidden = CommandLine.arguments.contains("--background")
+
+        // Request Location Services permission so macOS CoreWLAN exposes real Wi-Fi SSIDs instead of <redacted>
+        locationManager.delegate = self
+        if locationManager.authorizationStatus == .notDetermined {
+            locationManager.requestWhenInUseAuthorization()
+            locationManager.startUpdatingLocation()
+            DispatchQueue.main.asyncAfter(deadline: .now() + 3.0) { [weak self] in
+                self?.locationManager.stopUpdatingLocation()
+            }
+        }
 
         buildMainMenu()
         buildStatusItem()
@@ -69,7 +149,6 @@ final class AppDelegate: NSObject, NSApplicationDelegate, NSWindowDelegate, WKNa
     }
 
     func windowShouldClose(_ sender: NSWindow) -> Bool {
-        // Keep the agent running in the menu bar instead of quitting
         window.orderOut(nil)
         NSApp.setActivationPolicy(.accessory)
         return false
@@ -100,6 +179,7 @@ final class AppDelegate: NSObject, NSApplicationDelegate, NSWindowDelegate, WKNa
         var env = ProcessInfo.processInfo.environment
         env["PORT"] = String(port)
         env["HOST"] = "127.0.0.1"
+        env["SMARTMAC_APP_BIN"] = Bundle.main.executablePath ?? ""
         let nodeDir = (nodePath as NSString).deletingLastPathComponent
         env["PATH"] = "\(nodeDir):/opt/homebrew/bin:/usr/local/bin:/usr/bin:/bin:/usr/sbin:/sbin"
         process.environment = env
@@ -191,6 +271,12 @@ final class AppDelegate: NSObject, NSApplicationDelegate, NSWindowDelegate, WKNa
         NSWorkspace.shared.open(logURL)
     }
 
+    @objc private func openLocationSettings() {
+        if let url = URL(string: "x-apple.systempreferences:com.apple.preference.security?Privacy_LocationServices") {
+            NSWorkspace.shared.open(url)
+        }
+    }
+
     @objc private func quitApp() {
         serverProcess?.terminate()
         NSApp.terminate(nil)
@@ -208,7 +294,6 @@ final class AppDelegate: NSObject, NSApplicationDelegate, NSWindowDelegate, WKNa
         webView.loadHTMLString(html, baseURL: nil)
     }
 
-    // Open external links (Gmail, Google OAuth, docs) in the default browser
     func webView(_ webView: WKWebView,
                  decidePolicyFor navigationAction: WKNavigationAction,
                  decisionHandler: @escaping (WKNavigationActionPolicy) -> Void) {
@@ -232,7 +317,6 @@ final class AppDelegate: NSObject, NSApplicationDelegate, NSWindowDelegate, WKNa
         return nil
     }
 
-    // Allow microphone / camera for the local dashboard (Audio recorder, screen recorder narration)
     @available(macOS 12.0, *)
     func webView(_ webView: WKWebView,
                  requestMediaCapturePermissionFor origin: WKSecurityOrigin,
@@ -286,6 +370,7 @@ final class AppDelegate: NSObject, NSApplicationDelegate, NSWindowDelegate, WKNa
         menu.addItem(.separator())
         loginItem = addItem(menu, "Launch at Login", #selector(toggleLaunchAtLogin), "")
         loginItem.state = isLaunchAgentInstalled ? .on : .off
+        addItem(menu, "Wi-Fi Location Permission…", #selector(openLocationSettings), "")
         addItem(menu, "Show Server Logs", #selector(openLogs), "")
         menu.addItem(.separator())
         addItem(menu, "Quit SmartMac", #selector(quitApp), "q")

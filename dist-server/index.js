@@ -9,7 +9,7 @@ import { WebSocketServer, WebSocket } from 'ws';
 import { getSystemSnapshot, runQuickSystemAction } from './services/system.js';
 import { getTopProcesses, listInstalledApps, launchApplication, quitApplication, killProcessByPid, getAppIconPngPath, uninstallApplication, } from './services/processes.js';
 import { getBookmarks, listDirectory, readFilePreview, saveTextFile, createFolder, renameEntry, moveToTrash, revealInFinder, searchFilesInDir, } from './services/files.js';
-import { getNetworkOverview, scanWifiNetworks, toggleWifiPower, runPingDiagnostic } from './services/network.js';
+import { getNetworkOverview, scanWifiNetworks, toggleWifiPower, runPingDiagnostic, openMacLocationSettings, connectToWifiNetwork, } from './services/network.js';
 import { loadConfig, saveConfig, resetGmailSession, getGmailOAuthUrl, handleGmailOAuthCallback, fetchGmailMessages, fetchUnreadGmail3Days, sendGmailMessage, openExternalWebApp, } from './services/social.js';
 import { listVpsServers, saveVpsServer, deleteVpsServer, launchNativeSshTerminal, executeRemoteVpsCommand, listLocalSshKeys, } from './services/vps.js';
 import { MEDIA_CAPTURES_DIR, listCapturedMedia, takeNativeOsScreenshot, saveBase64MediaFile, deleteMediaFile, } from './services/media.js';
@@ -235,12 +235,21 @@ app.get('/api/network/overview', async (_req, res) => {
 });
 app.get('/api/network/wifi-scan', async (_req, res) => {
     try {
-        const networks = await scanWifiNetworks();
-        res.json({ networks });
+        const result = await scanWifiNetworks();
+        res.json(result);
     }
     catch (err) {
         res.status(500).json({ error: err.message });
     }
+});
+app.post('/api/network/wifi-location-settings', async (_req, res) => {
+    const result = await openMacLocationSettings();
+    res.json(result);
+});
+app.post('/api/network/wifi-connect', async (req, res) => {
+    const { ssid, password, iface } = req.body;
+    const result = await connectToWifiNetwork(String(ssid || ''), password ? String(password) : undefined, iface || 'en0');
+    res.json(result);
 });
 app.post('/api/network/wifi-toggle', async (req, res) => {
     const { enabled, iface } = req.body;

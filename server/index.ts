@@ -27,7 +27,14 @@ import {
   revealInFinder,
   searchFilesInDir,
 } from './services/files.js';
-import { getNetworkOverview, scanWifiNetworks, toggleWifiPower, runPingDiagnostic } from './services/network.js';
+import {
+  getNetworkOverview,
+  scanWifiNetworks,
+  toggleWifiPower,
+  runPingDiagnostic,
+  openMacLocationSettings,
+  connectToWifiNetwork,
+} from './services/network.js';
 import {
   loadConfig,
   saveConfig,
@@ -297,11 +304,22 @@ app.get('/api/network/overview', async (_req, res) => {
 
 app.get('/api/network/wifi-scan', async (_req, res) => {
   try {
-    const networks = await scanWifiNetworks();
-    res.json({ networks });
+    const result = await scanWifiNetworks();
+    res.json(result);
   } catch (err: any) {
     res.status(500).json({ error: err.message });
   }
+});
+
+app.post('/api/network/wifi-location-settings', async (_req, res) => {
+  const result = await openMacLocationSettings();
+  res.json(result);
+});
+
+app.post('/api/network/wifi-connect', async (req, res) => {
+  const { ssid, password, iface } = req.body;
+  const result = await connectToWifiNetwork(String(ssid || ''), password ? String(password) : undefined, iface || 'en0');
+  res.json(result);
 });
 
 app.post('/api/network/wifi-toggle', async (req, res) => {

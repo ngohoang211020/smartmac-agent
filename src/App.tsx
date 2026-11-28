@@ -1072,7 +1072,7 @@ export default function App() {
             )}
             {activeTab === 'apps' && <AppsAndProcessesTab t={t} lang={lang} onToast={showToast} />}
             {activeTab === 'files' && <FileExplorerTab t={t} onToast={showToast} />}
-            {activeTab === 'network' && <WifiAndNetworkTab t={t} snapshot={snapshot} onToast={showToast} />}
+            {activeTab === 'network' && <WifiAndNetworkTab t={t} lang={lang} snapshot={snapshot} onToast={showToast} />}
             {activeTab === 'social' && <SocialHubTab t={t} lang={lang} onToast={showToast} />}
             {activeTab === 'vps' && <VpsManagerTab t={t} lang={lang} onToast={showToast} />}
             {activeTab === 'media' && <MediaStudioTab t={t} lang={lang} onToast={showToast} />}
@@ -2594,16 +2594,22 @@ function FileExplorerTab({
 ============================================================================ */
 function WifiAndNetworkTab({
   t,
+  lang,
   snapshot,
   onToast,
 }: {
   t: typeof translations['en'];
+  lang: Lang;
   snapshot: SystemSnapshot | null;
   onToast: (m: string, t?: 'ok' | 'err') => void;
 }) {
+  const isVi = lang === 'vi';
   const [overview, setOverview] = useState<any>(null);
   const [scannedNetworks, setScannedNetworks] = useState<any[]>([]);
+  const [savedNetworks, setSavedNetworks] = useState<string[]>([]);
+  const [redactedByMacOS, setRedactedByMacOS] = useState(false);
   const [scanning, setScanning] = useState(false);
+  const [connectingSsid, setConnectingSsid] = useState<string | null>(null);
   const [pingHost, setPingHost] = useState('1.1.1.1');
   const [pingResult, setPingResult] = useState<string>('');
   const [pinging, setPinging] = useState(false);
@@ -2612,6 +2618,8 @@ function WifiAndNetworkTab({
     const res = await fetch('/api/network/overview');
     const data = await res.json();
     setOverview(data);
+    if (data.savedWifiNetworks) setSavedNetworks(data.savedWifiNetworks);
+    if (data.wifi?.redacted) setRedactedByMacOS(true);
   };
 
   useEffect(() => {
@@ -2624,9 +2632,42 @@ function WifiAndNetworkTab({
       const res = await fetch('/api/network/wifi-scan');
       const data = await res.json();
       setScannedNetworks(data.networks || []);
-      onToast(`Found ${(data.networks || []).length} Wi-Fi networks`);
+      if (data.savedNetworks) setSavedNetworks(data.savedNetworks);
+      setRedactedByMacOS(Boolean(data.redactedByMacOS));
+      onToast(
+        isVi
+          ? `Tìm thấy ${(data.networks || []).length} tín hiệu Wi-Fi xung quanh`
+          : `Found ${(data.networks || []).length} nearby Wi-Fi signals`
+      );
     } finally {
       setScanning(false);
+    }
+  };
+
+  const handleOpenLocationSettings = async () => {
+    const res = await fetch('/api/network/wifi-location-settings', { method: 'POST' });
+    const data = await res.json();
+    onToast(
+      isVi
+        ? 'Đã mở Cài đặt Định vị (Location Services). Hãy bật SmartMac rồi bấm Quét lại!'
+        : data.message,
+      data.ok ? 'ok' : 'err'
+    );
+  };
+
+  const handleConnectWifi = async (ssid: string) => {
+    setConnectingSsid(ssid);
+    try {
+      const res = await fetch('/api/network/wifi-connect', {
+        method: 'POST',
+        headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify({ ssid }),
+      });
+      const data = await res.json();
+      onToast(data.message, data.ok ? 'ok' : 'err');
+      if (data.ok) setTimeout(loadNetwork, 2000);
+    } finally {
+      setConnectingSsid(null);
     }
   };
 
@@ -2731,6 +2772,31 @@ function WifiAndNetworkTab({
         </div>
       </div>
 
+      {/* macOS Location Services Notice if macOS is redacting Wi-Fi SSIDs */}
+      {redactedByMacOS && (
+        <div className="p-4 rounded-xl bg-amber-50 border border-amber-200 flex flex-wrap items-center justify-between gap-3 text-xs">
+          <div className="space-y-0.5">
+            <div className="font-bold text-amber-900">
+              {isVi
+                ? 'macOS đang ẩn tên Wi-Fi xung quanh (<redacted>) để bảo vệ vị trí'
+                : 'macOS is hiding nearby Wi-Fi names (<redacted>) until Location Services is enabled'}
+            </div>
+            <div className="text-amber-700">
+              {isVi
+                ? 'Bật quyền Định vị (Location Services) cho ứng dụng SmartMac để hiển thị 100% tên Wi-Fi thật xung quanh.'
+                : 'Enable Location Services for SmartMac in macOS Privacy & Security to reveal real Wi-Fi SSIDs.'}
+            </div>
+          </div>
+          <button
+            onClick={handleOpenLocationSettings}
+            className="px-3.5 py-2 rounded-lg bg-[#F26522] hover:bg-orange-600 text-white font-bold text-xs shrink-0 cursor-pointer"
+          >
+            {isVi ? 'Mở Cài đặt Định vị (Location) ↗' : 'Open Location Settings ↗'}
+          </button>
+        </div>
+      )}
+
+      {/* Nearby Scanned Wi-Fi Networks */}
       {scannedNetworks.length > 0 && (
         <div className="p-5 rounded-xl bg-white border border-slate-200 shadow-2xs">
           <h3 className="text-sm font-bold text-slate-900 mb-3">
@@ -2738,14 +2804,63 @@ function WifiAndNetworkTab({
           </h3>
           <div className="grid grid-cols-1 sm:grid-cols-2 lg:grid-cols-3 gap-3">
             {scannedNetworks.map((n, idx) => (
-              <div key={idx} className="p-3 rounded-lg bg-slate-50 border border-slate-200 flex justify-between items-center text-xs">
-                <div>
-                  <div className="font-bold text-slate-900">{n.ssid}</div>
-                  <div className="text-slate-500">Ch {n.channel} • {n.security}</div>
+              <div key={idx} className="p-3 rounded-lg bg-slate-50 border border-slate-200 flex justify-between items-center text-xs gap-2">
+                <div className="min-w-0">
+                  <div className="font-bold text-slate-900 truncate">{n.ssid}</div>
+                  <div className="text-slate-500">Ch {n.channel || '?'} • {n.security || 'WPA2'}</div>
                 </div>
-                <span className="px-2 py-1 rounded bg-orange-50 text-[#F26522] font-mono font-semibold">
-                  {n.signalLevel} dBm
-                </span>
+                <div className="flex items-center gap-1.5 shrink-0">
+                  <span className="px-2 py-1 rounded bg-orange-50 text-[#F26522] font-mono font-semibold">
+                    {n.signalLevel} dBm
+                  </span>
+                  {!n.isRedacted && (
+                    <button
+                      onClick={() => handleConnectWifi(n.ssid)}
+                      disabled={connectingSsid === n.ssid}
+                      className="px-2 py-1 rounded bg-[#1B2537] hover:bg-slate-800 text-white font-semibold text-[11px] cursor-pointer"
+                    >
+                      {connectingSsid === n.ssid ? '...' : isVi ? 'Kết nối' : 'Connect'}
+                    </button>
+                  )}
+                </div>
+              </div>
+            ))}
+          </div>
+        </div>
+      )}
+
+      {/* Saved / Known Wi-Fi Networks (Real SSIDs from macOS Preferred List) */}
+      {savedNetworks.length > 0 && (
+        <div className="p-5 rounded-xl bg-white border border-slate-200 shadow-2xs">
+          <div className="flex items-center justify-between mb-3">
+            <div>
+              <h3 className="text-sm font-bold text-slate-900">
+                {isVi ? `Mạng Wi-Fi Đã Lưu Trên Máy (${savedNetworks.length})` : `Saved / Known Wi-Fi Networks (${savedNetworks.length})`}
+              </h3>
+              <p className="text-[11px] text-slate-400">
+                {isVi ? 'Nhấn "Kết nối" để chuyển nhanh sang mạng Wi-Fi đã lưu' : 'Click "Connect" to switch directly to a known Wi-Fi network'}
+              </p>
+            </div>
+          </div>
+          <div className="grid grid-cols-1 sm:grid-cols-2 lg:grid-cols-4 gap-2.5">
+            {savedNetworks.slice(0, 16).map((ssid) => (
+              <div
+                key={ssid}
+                className="p-2.5 rounded-lg bg-slate-50 border border-slate-200 flex items-center justify-between gap-2 text-xs"
+              >
+                <div className="flex items-center gap-2 min-w-0">
+                  <Wifi className="w-3.5 h-3.5 text-[#F26522] shrink-0" />
+                  <span className="font-semibold text-slate-800 truncate" title={ssid}>
+                    {ssid}
+                  </span>
+                </div>
+                <button
+                  onClick={() => handleConnectWifi(ssid)}
+                  disabled={connectingSsid === ssid}
+                  className="px-2.5 py-1 rounded bg-white hover:bg-[#F26522] hover:text-white text-slate-700 border border-slate-200 font-semibold text-[11px] shrink-0 transition cursor-pointer"
+                >
+                  {connectingSsid === ssid ? '...' : isVi ? 'Kết nối' : 'Connect'}
+                </button>
               </div>
             ))}
           </div>

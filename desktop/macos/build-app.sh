@@ -74,12 +74,12 @@ sleep 0.5
 rm -rf "$APP_DIR"
 mkdir -p "$APP_DIR/Contents/MacOS" "$APP_DIR/Contents/Resources"
 
-# 1. Compile native Swift shell
+# 1. Compile native Swift shell (with CoreLocation + CoreWLAN for real Wi-Fi SSID scanning)
 echo "🔨 Compiling native Swift app..."
 swiftc -O -swift-version 5 \
   "$ROOT/desktop/macos/SmartMacApp.swift" \
   -o "$APP_DIR/Contents/MacOS/$APP_NAME" \
-  -framework Cocoa -framework WebKit
+  -framework Cocoa -framework WebKit -framework CoreLocation -framework CoreWLAN
 
 # 2. Generate .icns app icon from public/logo.png
 echo "🎨 Generating app icon..."
@@ -112,6 +112,8 @@ cat > "$APP_DIR/Contents/Info.plist" <<PLIST
   <key>NSPrincipalClass</key><string>NSApplication</string>
   <key>NSMicrophoneUsageDescription</key><string>SmartMac uses the microphone for the Audio Recorder and screen recording narration.</string>
   <key>NSCameraUsageDescription</key><string>SmartMac may access the camera for media capture features.</string>
+  <key>NSLocationUsageDescription</key><string>SmartMac uses Location Services so macOS reveals real nearby Wi-Fi network names (SSIDs) instead of redacted.</string>
+  <key>NSLocationWhenInUseUsageDescription</key><string>SmartMac uses Location Services so macOS reveals real nearby Wi-Fi network names (SSIDs) instead of redacted.</string>
   <key>NSAppTransportSecurity</key>
   <dict>
     <key>NSAllowsLocalNetworking</key><true/>

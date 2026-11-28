@@ -4561,79 +4561,36 @@ function CamerasMonitorTab({
   const [discovered, setDiscovered] = useState<Array<{ ip: string; port: number }>>([]);
   const [discoveredSubnet, setDiscoveredSubnet] = useState('');
 
-  // Embedded Live App Window Streams (ImouLife HD & Tapo mirrored directly inside the Web UI)
-  const [embeddedWindows, setEmbeddedWindows] = useState<
-    Array<{ id: string; label: string; brand: 'imou' | 'tapo'; stream: MediaStream }>
-  >([]);
+  // Zero-Popup Embedded Native App Window Live State (ImouLife HD & Tapo)
+  const [nativeEmbedLive, setNativeEmbedLive] = useState<{ imou: boolean; tapo: boolean }>({
+    imou: false,
+    tapo: false,
+  });
+  const [nativeEmbedNonce, setNativeEmbedNonce] = useState<{ imou: number; tapo: number }>({
+    imou: 1,
+    tapo: 1,
+  });
 
-  const handleEmbedNativeWindow = async (label: string, brand: 'imou' | 'tapo', appPath: string) => {
-    // 1. Launch / bring the macOS app to front first so it appears in the window picker
-    await fetch('/api/apps/launch', {
-      method: 'POST',
-      headers: { 'Content-Type': 'application/json' },
-      body: JSON.stringify({ appNameOrPath: appPath }),
-    }).catch(() => {});
-
-    try {
-      const stream = await navigator.mediaDevices.getDisplayMedia({
-        video: { frameRate: 24 },
-        audio: false,
-      });
-      const id = `win-${brand}-${Date.now()}`;
-      stream.getVideoTracks()[0].onended = () => {
-        setEmbeddedWindows((prev) => prev.filter((w) => w.id !== id));
-      };
-      setEmbeddedWindows((prev) => [...prev, { id, label, brand, stream }]);
-      onToast(
-        isVi
-          ? `Đã nhúng trực tiếp luồng ${label} vào giao diện web!`
-          : `Embedded live ${label} window into SmartMac web dashboard!`
-      );
-    } catch (err: any) {
-      onToast(
-        isVi ? 'Đã hủy chọn cửa sổ để nhúng vào web' : err.message || 'Window embed cancelled',
-        'err'
-      );
-    }
-  };
-
-  const handleStopEmbeddedWindow = (id: string) => {
-    setEmbeddedWindows((prev) => {
-      const target = prev.find((w) => w.id === id);
-      target?.stream.getTracks().forEach((tr) => tr.stop());
-      return prev.filter((w) => w.id !== id);
-    });
-  };
-
-  const handleSnapshotEmbeddedVideo = async (label: string, stream: MediaStream) => {
-    try {
-      const video = document.createElement('video');
-      video.srcObject = stream;
-      video.muted = true;
-      await video.play();
-      const canvas = document.createElement('canvas');
-      canvas.width = video.videoWidth || 1280;
-      canvas.height = video.videoHeight || 720;
-      canvas.getContext('2d')?.drawImage(video, 0, 0, canvas.width, canvas.height);
-      const base64Data = canvas.toDataURL('image/png');
-      const filename = `Cam_${label.replace(/[^a-zA-Z0-9_-]/g, '_')}_${new Date().toISOString().replace(/[:.]/g, '-')}.png`;
-      const res = await fetch('/api/media/save', {
+  const toggleNativeAutoEmbed = async (key: 'imou' | 'tapo', label: string, appPath: string) => {
+    const next = !nativeEmbedLive[key];
+    if (next) {
+      // Ensure the macOS app is running first
+      await fetch('/api/apps/launch', {
         method: 'POST',
         headers: { 'Content-Type': 'application/json' },
-        body: JSON.stringify({ filename, base64Data, type: 'screenshot' }),
-      });
-      const data = await res.json();
-      onToast(data.message, data.ok ? 'ok' : 'err');
-    } catch (err: any) {
-      onToast(err.message, 'err');
+        body: JSON.stringify({ appNameOrPath: appPath }),
+      }).catch(() => {});
+      setNativeEmbedNonce((prev) => ({ ...prev, [key]: Date.now() }));
+      setNativeEmbedLive((prev) => ({ ...prev, [key]: true }));
+      onToast(
+        isVi
+          ? `Đang nhúng trực tiếp ${label} vào giao diện web (không cần popup)!`
+          : `Auto-embedding live ${label} directly inside SmartMac!`
+      );
+    } else {
+      setNativeEmbedLive((prev) => ({ ...prev, [key]: false }));
     }
   };
-
-  useEffect(() => {
-    return () => {
-      embeddedWindows.forEach((w) => w.stream.getTracks().forEach((tr) => tr.stop()));
-    };
-  }, []);
 
   // Add Camera Form
   const [brand, setBrand] = useState<'tapo' | 'imou' | 'custom'>('tapo');
@@ -4809,126 +4766,130 @@ function CamerasMonitorTab({
         </div>
       </div>
 
-      {/* Installed Native Camera Apps on Mac: ImouLife HD.app & Tapo.app (Gmail Cloud Login) */}
-      <div className="grid grid-cols-1 md:grid-cols-2 gap-4">
+      {/* Zero-Popup Embedded Live Viewers for Installed ImouLife HD.app & Tapo.app */}
+      <div className="grid grid-cols-1 lg:grid-cols-2 gap-4">
         {[
           {
+            key: 'imou' as const,
             label: 'ImouLife HD',
             appPath: '/Applications/ImouLife HD.app',
             appName: 'ImouLife HD',
             desc: isVi
-              ? 'Ứng dụng ImouLife HD đã cài trên Mac • Đăng nhập Cloud bằng Gmail'
-              : 'Installed on Mac (/Applications/ImouLife HD.app) • Gmail Cloud Login',
-            fallbackTarget: 'imou_cloud',
-            accent: 'orange',
+              ? 'Nhúng trực tiếp cửa sổ ImouLife HD.app (Gmail Cloud) ngay trong Web'
+              : 'Live embedded ImouLife HD.app (Gmail Cloud) directly inside Web',
           },
           {
+            key: 'tapo' as const,
             label: 'TP-Link Tapo',
             appPath: '/Applications/Tapo.app',
             appName: 'Tapo',
             desc: isVi
-              ? 'Ứng dụng Tapo đã cài trên Mac • Đăng nhập Cloud bằng Gmail'
-              : 'Installed on Mac (/Applications/Tapo.app) • Gmail Cloud Login',
-            fallbackTarget: 'tapo_web',
-            accent: 'blue',
+              ? 'Nhúng trực tiếp cửa sổ Tapo.app (Gmail Cloud) ngay trong Web'
+              : 'Live embedded Tapo.app (Gmail Cloud) directly inside Web',
           },
-        ].map((nativeApp) => (
-          <div
-            key={nativeApp.appPath}
-            className="p-4 rounded-xl bg-white border border-slate-200 shadow-2xs flex items-center justify-between gap-3 hover:border-orange-300 transition"
-          >
-            <div className="flex items-center gap-3 min-w-0">
-              <AppProcessIcon name={nativeApp.appName} appPath={nativeApp.appPath} size="md" />
-              <div className="min-w-0">
-                <div className="flex items-center gap-2">
-                  <span className="text-sm font-bold text-slate-900 truncate">{nativeApp.label}</span>
-                  <span className="text-[10px] font-bold px-1.5 py-0.5 rounded bg-emerald-50 text-emerald-700 border border-emerald-200">
-                    INSTALLED
+        ].map((nativeApp) => {
+          const isEmbedded = nativeEmbedLive[nativeApp.key];
+          const streamSrc = `/api/cameras/native/${nativeApp.key}/stream?t=${nativeEmbedNonce[nativeApp.key]}${
+            secToken ? `&token=${encodeURIComponent(secToken)}` : ''
+          }`;
+
+          return (
+            <div
+              key={nativeApp.appPath}
+              className={`rounded-xl bg-white border shadow-2xs overflow-hidden flex flex-col transition ${
+                isEmbedded ? 'border-2 border-[#F26522]' : 'border-slate-200 hover:border-orange-300'
+              }`}
+            >
+              {/* Embedded Live Viewport */}
+              <div className="relative aspect-video bg-slate-950 flex items-center justify-center overflow-hidden">
+                {isEmbedded ? (
+                  <img
+                    src={streamSrc}
+                    alt={nativeApp.label}
+                    className="w-full h-full object-contain"
+                  />
+                ) : (
+                  <div className="text-center space-y-3 p-5">
+                    <div className="flex justify-center">
+                      <AppProcessIcon name={nativeApp.appName} appPath={nativeApp.appPath} size="md" />
+                    </div>
+                    <div>
+                      <div className="text-sm font-bold text-white">{nativeApp.label}</div>
+                      <div className="text-[11px] text-slate-400 mt-0.5">{nativeApp.desc}</div>
+                    </div>
+                    <button
+                      onClick={() => toggleNativeAutoEmbed(nativeApp.key, nativeApp.label, nativeApp.appPath)}
+                      className="px-4 py-2 rounded-lg bg-[#F26522] hover:bg-orange-600 text-white text-xs font-bold inline-flex items-center gap-1.5 cursor-pointer shadow-sm"
+                    >
+                      <Video className="w-3.5 h-3.5" />
+                      <span>{isVi ? 'Nhúng Live Ngay Trong Web' : 'Start Embedded Live View'}</span>
+                    </button>
+                  </div>
+                )}
+
+                <div className="absolute top-2.5 left-2.5 flex items-center gap-1.5">
+                  <span className="px-2 py-0.5 rounded bg-black/75 text-white text-[10px] font-bold uppercase">
+                    {nativeApp.label}
                   </span>
+                  {isEmbedded && (
+                    <span className="px-2 py-0.5 rounded bg-rose-600 text-white text-[10px] font-bold flex items-center gap-1">
+                      <span className="w-1.5 h-1.5 rounded-full bg-white animate-pulse" />
+                      EMBEDDED LIVE
+                    </span>
+                  )}
                 </div>
-                <div className="text-[11px] text-slate-500 truncate mt-0.5">{nativeApp.desc}</div>
+              </div>
+
+              {/* Card Controls Footer */}
+              <div className="p-3.5 flex items-center justify-between gap-2 bg-white border-t border-slate-100">
+                <div className="flex items-center gap-2.5 min-w-0">
+                  <AppProcessIcon name={nativeApp.appName} appPath={nativeApp.appPath} size="sm" />
+                  <div className="min-w-0">
+                    <div className="text-xs font-bold text-slate-900 truncate">{nativeApp.label}</div>
+                    <div className="text-[11px] text-slate-400 truncate">
+                      {isEmbedded
+                        ? isVi
+                          ? 'Đang phát trực tiếp trong SmartMac'
+                          : 'Streaming live inside SmartMac'
+                        : nativeApp.appPath}
+                    </div>
+                  </div>
+                </div>
+
+                <div className="flex items-center gap-1.5 shrink-0">
+                  <button
+                    onClick={() => toggleNativeAutoEmbed(nativeApp.key, nativeApp.label, nativeApp.appPath)}
+                    className={`px-3 py-1.5 rounded-lg text-xs font-bold flex items-center gap-1 cursor-pointer transition ${
+                      isEmbedded
+                        ? 'bg-rose-50 text-rose-600 border border-rose-200 hover:bg-rose-100'
+                        : 'bg-[#F26522] hover:bg-orange-600 text-white'
+                    }`}
+                  >
+                    {isEmbedded ? <Square className="w-3 h-3" /> : <Video className="w-3.5 h-3.5" />}
+                    <span>{isEmbedded ? (isVi ? 'Dừng' : 'Stop') : isVi ? 'Nhúng Live' : 'Embed Live'}</span>
+                  </button>
+
+                  <button
+                    onClick={async () => {
+                      const res = await fetch('/api/apps/launch', {
+                        method: 'POST',
+                        headers: { 'Content-Type': 'application/json' },
+                        body: JSON.stringify({ appNameOrPath: nativeApp.appPath }),
+                      });
+                      const data = await res.json();
+                      onToast(data.ok ? (isVi ? `Đã mở ${nativeApp.label}` : data.message) : data.message, data.ok ? 'ok' : 'err');
+                    }}
+                    className="p-2 rounded-lg bg-slate-100 hover:bg-slate-200 text-slate-700 transition cursor-pointer"
+                    title={isVi ? `Đưa cửa sổ ${nativeApp.label} lên trước` : `Focus ${nativeApp.label} Window`}
+                  >
+                    <ExternalLink className="w-3.5 h-3.5" />
+                  </button>
+                </div>
               </div>
             </div>
-
-            <div className="flex items-center gap-1.5 shrink-0">
-              <button
-                onClick={() =>
-                  handleEmbedNativeWindow(
-                    nativeApp.label,
-                    nativeApp.accent === 'orange' ? 'imou' : 'tapo',
-                    nativeApp.appPath
-                  )
-                }
-                className="px-3 py-1.5 rounded-lg bg-[#F26522] hover:bg-orange-600 text-white text-xs font-bold flex items-center gap-1.5 cursor-pointer"
-                title={
-                  isVi
-                    ? `Nhúng trực tiếp cửa sổ ${nativeApp.label} để xem ngay trên web`
-                    : `Embed ${nativeApp.label} live view directly in this web dashboard`
-                }
-              >
-                <Video className="w-3.5 h-3.5" />
-                <span>{isVi ? 'Xem Trên Web' : 'Watch in Web'}</span>
-              </button>
-              <button
-                onClick={async () => {
-                  const res = await fetch('/api/apps/launch', {
-                    method: 'POST',
-                    headers: { 'Content-Type': 'application/json' },
-                    body: JSON.stringify({ appNameOrPath: nativeApp.appPath }),
-                  });
-                  const data = await res.json();
-                  if (!data.ok) {
-                    await fetch('/api/social/open-web', {
-                      method: 'POST',
-                      headers: { 'Content-Type': 'application/json' },
-                      body: JSON.stringify({ target: nativeApp.fallbackTarget }),
-                    });
-                  }
-                  onToast(data.ok ? (isVi ? `Đã mở ${nativeApp.label}` : data.message) : data.message, data.ok ? 'ok' : 'err');
-                }}
-                className="p-2 rounded-lg bg-emerald-50 hover:bg-emerald-100 text-emerald-700 border border-emerald-200 transition cursor-pointer"
-                title={isVi ? `Mở cửa sổ ${nativeApp.label}` : `Open ${nativeApp.label}`}
-              >
-                <Play className="w-3.5 h-3.5" />
-              </button>
-              <button
-                onClick={async () => {
-                  const res = await fetch('/api/apps/quit', {
-                    method: 'POST',
-                    headers: { 'Content-Type': 'application/json' },
-                    body: JSON.stringify({ appName: nativeApp.appName }),
-                  });
-                  const data = await res.json();
-                  onToast(data.message, data.ok ? 'ok' : 'err');
-                }}
-                className="p-2 rounded-lg bg-slate-100 hover:bg-rose-50 text-slate-600 hover:text-rose-600 border border-slate-200 transition cursor-pointer"
-                title={isVi ? `Đóng ${nativeApp.label}` : `Quit ${nativeApp.label}`}
-              >
-                <Square className="w-3.5 h-3.5" />
-              </button>
-            </div>
-          </div>
-        ))}
+          );
+        })}
       </div>
-
-      {/* Live Embedded ImouLife HD / Tapo Web Feeds */}
-      {embeddedWindows.length > 0 && (
-        <div
-          className={`grid gap-4 ${
-            gridCols === 1 ? 'grid-cols-1' : gridCols === 3 ? 'grid-cols-1 md:grid-cols-2 xl:grid-cols-3' : 'grid-cols-1 lg:grid-cols-2'
-          }`}
-        >
-          {embeddedWindows.map((win) => (
-            <EmbeddedCameraCard
-              key={win.id}
-              item={win}
-              isVi={isVi}
-              onSnapshot={() => handleSnapshotEmbeddedVideo(win.label, win.stream)}
-              onStop={() => handleStopEmbeddedWindow(win.id)}
-            />
-          ))}
-        </div>
-      )}
 
       {/* Discovered LAN RTSP Devices Banner */}
       {discovered.length > 0 && (

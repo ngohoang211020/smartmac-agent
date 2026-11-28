@@ -76,6 +76,66 @@ if CommandLine.arguments.contains("--wifi-json") {
     runWifiJsonHelper()
 }
 
+// MARK: - CLI Helper Mode: SmartMac --find-window "ImouLife HD" (finds macOS CGWindowID for zero-popup live embed)
+func runFindWindowHelper(_ targetName: String) {
+    let options: CGWindowListOption = [.excludeDesktopElements]
+    guard let list = CGWindowListCopyWindowInfo(options, kCGNullWindowID) as? [[String: Any]] else {
+        print("{\"found\":false}")
+        exit(0)
+    }
+
+    let query = targetName.lowercased()
+    var bestWindowId: Int? = nil
+    var bestArea: Double = 0
+    var bestOwner = ""
+    var bestTitle = ""
+
+    for info in list {
+        let owner = (info[kCGWindowOwnerName as String] as? String) ?? ""
+        let title = (info[kCGWindowName as String] as? String) ?? ""
+        let layer = (info[kCGWindowLayer as String] as? Int) ?? 0
+        if layer != 0 { continue }
+
+        let ownerLow = owner.lowercased()
+        let titleLow = title.lowercased()
+        if ownerLow.contains(query) || titleLow.contains(query) {
+            if let bounds = info[kCGWindowBounds as String] as? [String: Any],
+               let w = bounds["Width"] as? Double,
+               let h = bounds["Height"] as? Double,
+               w > 100, h > 100,
+               let wid = info[kCGWindowNumber as String] as? Int {
+                let area = w * h
+                if area > bestArea {
+                    bestArea = area
+                    bestWindowId = wid
+                    bestOwner = owner
+                    bestTitle = title
+                }
+            }
+        }
+    }
+
+    if let wid = bestWindowId {
+        let payload: [String: Any] = [
+            "found": true,
+            "windowId": wid,
+            "owner": bestOwner,
+            "title": bestTitle,
+        ]
+        if let data = try? JSONSerialization.data(withJSONObject: payload, options: []),
+           let json = String(data: data, encoding: .utf8) {
+            print(json)
+            exit(0)
+        }
+    }
+    print("{\"found\":false}")
+    exit(0)
+}
+
+if let idx = CommandLine.arguments.firstIndex(of: "--find-window"), idx + 1 < CommandLine.arguments.count {
+    runFindWindowHelper(CommandLine.arguments[idx + 1])
+}
+
 final class AppDelegate: NSObject, NSApplicationDelegate, NSWindowDelegate, WKNavigationDelegate, WKUIDelegate, CLLocationManagerDelegate {
     private var window: NSWindow!
     private var webView: WKWebView!

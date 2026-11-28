@@ -313,3 +313,113 @@ export async function captureCameraSnapshot(
     };
   }
 }
+
+function findSmartMacAppBin(): string | null {
+  if (os.platform() !== 'darwin') return null;
+  const candidates = [
+    process.env.SMARTMAC_APP_BIN || '',
+    '/Applications/SmartMac.app/Contents/MacOS/SmartMac',
+    `${os.homedir()}/Applications/SmartMac.app/Contents/MacOS/SmartMac`,
+  ].filter(Boolean);
+  for (const p of candidates) {
+    if (fsSync.existsSync(p)) return p;
+  }
+  return null;
+}
+
+export async function findNativeAppWindowId(appQuery: string): Promise<{
+  found: boolean;
+  windowId?: number;
+  owner?: string;
+  title?: string;
+}> {
+  const bin = findSmartMacAppBin();
+  if (!bin) return { found: false };
+  try {
+    const { stdout } = await execFileAsync(bin, ['--find-window', appQuery], { timeout: 4000 });
+    return JSON.parse(stdout);
+  } catch {
+    return { found: false };
+  }
+}
+
+/**
+ * Zero-popup Live MJPEG stream of an installed macOS app window (e.g. "ImouLife" or "Tapo")
+ * Automatically finds the CGWindowID and streams frames directly into an <img> tag in the web UI.
+ */
+export async function streamNativeAppWindowMjpeg(appKey: string, req: Request, res: Response) {
+  if (os.platform() !== 'darwin') {
+    return res.status(400).json({ error: 'Native window embed is supported on macOS' });
+  }
+
+  const queryMap: Record<string, { query: string; appPath: string }> = {
+    imou: { query: 'Imou', appPath: '/Applications/ImouLife HD.app' },
+    tapo: { query: 'Tapo', appPath: '/Applications/Tapo.app' },
+  };
+  const target = queryMap[appKey.toLowerCase()];
+  if (!target) {
+    return res.status(404).json({ error: 'Unknown native app key' });
+  }
+
+  // Ensure the app is launched so its window exists
+  let win = await findNativeAppWindowId(target.query);
+  if (!win.found && fsSync.existsSync(target.appPath)) {
+    await execFileAsync('open', ['-g', target.appPath]).catch(() => {});
+    await new Promise((r) => setTimeout(r, 1800));
+    win = await findNativeAppWindowId(target.query);
+  }
+
+  if (!win.found || !win.windowId) {
+    return res.status(404).json({
+      error: `${target.query} window not found. Make sure ${target.appPath} is open.`,
+    });
+  }
+
+  const boundary = 'smartmacwinframe';
+  res.writeHead(200, {
+    'Content-Type': `multipart/x-mixed-replace; boundary=${boundary}`,
+    'Cache-Control': 'no-cache, no-store, must-revalidate',
+    Pragma: 'no-cache',
+    Connection: 'keep-alive',
+  });
+
+  let closed = false;
+  req.on('close', () => {
+    closed = true;
+  });
+
+  const tmpFile = path.join(os.tmpdir(), `smartmac-win-${appKey}-${Date.now()}.jpg`);
+
+  const captureLoop = async () => {
+    while (!closed && !res.writableEnded) {
+      try {
+        await execFileAsync(
+          'screencapture',
+          ['-l', String(win.windowId), '-o', '-x', '-t', 'jpg', tmpFile],
+          { timeout: 3000 }
+        );
+        if (fsSync.existsSync(tmpFile)) {
+          const frame = await fs.readFile(tmpFile);
+          if (!closed && !res.writableEnded && frame.length > 0) {
+            res.write(
+              `--${boundary}\r\nContent-Type: image/jpeg\r\nContent-Length: ${frame.length}\r\n\r\n`
+            );
+            res.write(frame);
+            res.write('\r\n');
+          }
+        }
+      } catch {
+        // Re-check windowId in case the app window was recreated
+        const refreshed = await findNativeAppWindowId(target.query);
+        if (refreshed.found && refreshed.windowId) {
+          win = refreshed;
+        }
+      }
+      await new Promise((r) => setTimeout(r, 220)); // ~4-5 FPS smooth low-CPU live embed
+    }
+    await fs.unlink(tmpFile).catch(() => {});
+    if (!res.writableEnded) res.end();
+  };
+
+  captureLoop();
+}

@@ -68,6 +68,8 @@ import {
   discoverLanCameras,
   streamCameraMjpeg,
   captureCameraSnapshot,
+  streamNativeAppWindowMjpeg,
+  findNativeAppWindowId,
 } from './services/cameras.js';
 import { processAgentMessage } from './services/agent.js';
 import {
@@ -574,6 +576,18 @@ app.get('/api/cameras/:id/stream', (req, res) => {
 app.post('/api/cameras/:id/snapshot', async (req, res) => {
   const result = await captureCameraSnapshot(req.params.id);
   res.json(result);
+});
+
+// Zero-popup native macOS app window live embed (ImouLife HD & Tapo)
+app.get('/api/cameras/native/:appKey/status', async (req, res) => {
+  const key = req.params.appKey.toLowerCase();
+  const query = key === 'imou' ? 'Imou' : 'Tapo';
+  const result = await findNativeAppWindowId(query);
+  res.json(result);
+});
+
+app.get('/api/cameras/native/:appKey/stream', (req, res) => {
+  streamNativeAppWindowMjpeg(req.params.appKey, req, res);
 });
 
 // --- AI AGENT CHAT ROUTE ---

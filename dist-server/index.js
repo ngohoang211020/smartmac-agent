@@ -13,7 +13,7 @@ import { getNetworkOverview, scanWifiNetworks, toggleWifiPower, runPingDiagnosti
 import { loadConfig, saveConfig, resetGmailSession, getGmailOAuthUrl, handleGmailOAuthCallback, fetchGmailMessages, fetchUnreadGmail3Days, sendGmailMessage, openExternalWebApp, } from './services/social.js';
 import { listVpsServers, saveVpsServer, deleteVpsServer, launchNativeSshTerminal, executeRemoteVpsCommand, listLocalSshKeys, } from './services/vps.js';
 import { MEDIA_CAPTURES_DIR, listCapturedMedia, takeNativeOsScreenshot, saveBase64MediaFile, deleteMediaFile, } from './services/media.js';
-import { listCameras, saveCamera, deleteCamera, discoverLanCameras, streamCameraMjpeg, captureCameraSnapshot, } from './services/cameras.js';
+import { listCameras, saveCamera, deleteCamera, discoverLanCameras, streamCameraMjpeg, captureCameraSnapshot, streamNativeAppWindowMjpeg, findNativeAppWindowId, } from './services/cameras.js';
 import { processAgentMessage } from './services/agent.js';
 import { strictLocalOriginGuard, adminPinAuthGuard, getSecurityStatus, saveSecurityPin, verifySecurityPin, } from './security.js';
 const __filename = fileURLToPath(import.meta.url);
@@ -479,6 +479,16 @@ app.get('/api/cameras/:id/stream', (req, res) => {
 app.post('/api/cameras/:id/snapshot', async (req, res) => {
     const result = await captureCameraSnapshot(req.params.id);
     res.json(result);
+});
+// Zero-popup native macOS app window live embed (ImouLife HD & Tapo)
+app.get('/api/cameras/native/:appKey/status', async (req, res) => {
+    const key = req.params.appKey.toLowerCase();
+    const query = key === 'imou' ? 'Imou' : 'Tapo';
+    const result = await findNativeAppWindowId(query);
+    res.json(result);
+});
+app.get('/api/cameras/native/:appKey/stream', (req, res) => {
+    streamNativeAppWindowMjpeg(req.params.appKey, req, res);
 });
 // --- AI AGENT CHAT ROUTE ---
 app.post('/api/agent/chat', async (req, res) => {

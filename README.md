@@ -160,6 +160,7 @@ Vì ứng dụng có quyền điều khiển tệp tin, ứng dụng và SSH tr�
 | **Wi-Fi & Mạng** | Xem tên Wi-Fi đang kết nối, Gateway, DNS, tốc độ tải lên/xuống trực tiếp, quét mạng Wi-Fi xung quanh, bật/tắt Wi-Fi và kiểm tra Ping. |
 | **Gmail OAuth 2.0** | Đồng bộ email chưa đọc 3 ngày gần nhất trên icon Chuông (`🔔`), nhấp vào từng email để mở thẳng trong Gmail, soạn & gửi email nhanh, hỗ trợ Reset Session để đổi tài khoản. |
 | **VPS & Remote SSH (`PRO`)** | Lưu danh sách máy chủ VPS, mở cửa sổ Terminal SSH gốc của máy chỉ với 1 click, hoặc chạy nhanh lệnh kiểm tra Docker / RAM / Disk / Nginx từ xa. |
+| **Camera An Ninh (`Imou & Tapo`)** | Tích hợp trực tiếp **Imou Life HD** & **TP-Link Tapo** qua giao thức RTSP cục bộ (kèm công cụ **Quét Camera LAN** tìm IP tự động, lưới xem nhiều camera 1×1 / 2×2 / 3×3 và chụp ảnh nhanh). |
 | **Trợ lý AI Super Agent** | Chat bằng ngôn ngữ tự nhiên để điều khiển máy tính (`check system health`, `open Safari`, `ping 1.1.1.1`, `flush dns`...), hỗ trợ thêm khóa Gemini API (tùy chọn). |
 
 ---

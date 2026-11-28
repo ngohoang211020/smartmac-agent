@@ -13,6 +13,7 @@ import { getNetworkOverview, scanWifiNetworks, toggleWifiPower, runPingDiagnosti
 import { loadConfig, saveConfig, resetGmailSession, getGmailOAuthUrl, handleGmailOAuthCallback, fetchGmailMessages, fetchUnreadGmail3Days, sendGmailMessage, openExternalWebApp, } from './services/social.js';
 import { listVpsServers, saveVpsServer, deleteVpsServer, launchNativeSshTerminal, executeRemoteVpsCommand, listLocalSshKeys, } from './services/vps.js';
 import { MEDIA_CAPTURES_DIR, listCapturedMedia, takeNativeOsScreenshot, saveBase64MediaFile, deleteMediaFile, } from './services/media.js';
+import { listCameras, saveCamera, deleteCamera, discoverLanCameras, streamCameraMjpeg, captureCameraSnapshot, } from './services/cameras.js';
 import { processAgentMessage } from './services/agent.js';
 import { strictLocalOriginGuard, adminPinAuthGuard, getSecurityStatus, saveSecurityPin, verifySecurityPin, } from './security.js';
 const __filename = fileURLToPath(import.meta.url);
@@ -437,6 +438,47 @@ app.get('/api/media/file/:name', (req, res) => {
         return res.status(404).end();
     }
     res.sendFile(fullPath);
+});
+// --- SECURITY CAMERAS (IMOU LIFE & TP-LINK TAPO RTSP) ROUTES ---
+app.get('/api/cameras', async (_req, res) => {
+    const cameras = await listCameras();
+    // Mask passwords in API list response while keeping brand/host/username visible
+    res.json({
+        cameras: cameras.map((c) => ({
+            ...c,
+            password: c.password ? '••••••••' : '',
+            hasPassword: Boolean(c.password),
+        })),
+    });
+});
+app.post('/api/cameras', async (req, res) => {
+    try {
+        const cameras = await saveCamera(req.body);
+        res.json({ ok: true, cameras });
+    }
+    catch (err) {
+        res.status(400).json({ ok: false, message: err.message });
+    }
+});
+app.delete('/api/cameras/:id', async (req, res) => {
+    const cameras = await deleteCamera(req.params.id);
+    res.json({ ok: true, cameras });
+});
+app.get('/api/cameras/discover', async (_req, res) => {
+    try {
+        const result = await discoverLanCameras();
+        res.json(result);
+    }
+    catch (err) {
+        res.status(500).json({ error: err.message });
+    }
+});
+app.get('/api/cameras/:id/stream', (req, res) => {
+    streamCameraMjpeg(req.params.id, req, res);
+});
+app.post('/api/cameras/:id/snapshot', async (req, res) => {
+    const result = await captureCameraSnapshot(req.params.id);
+    res.json(result);
 });
 // --- AI AGENT CHAT ROUTE ---
 app.post('/api/agent/chat', async (req, res) => {

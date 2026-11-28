@@ -129,7 +129,7 @@ function formatUptime(seconds: number): string {
   return `${pad(h)}:${pad(m)}:${pad(s)}`;
 }
 
-type ActiveTab = 'overview' | 'apps' | 'files' | 'network' | 'social' | 'vps' | 'media';
+type ActiveTab = 'overview' | 'apps' | 'files' | 'network' | 'social' | 'vps' | 'media' | 'cameras';
 
 function openGmailMessageDirect(messageId: string) {
   if (!messageId || messageId.startsWith('demo-') || messageId.startsWith('cli-')) {
@@ -507,6 +507,12 @@ export default function App() {
                         onClick={() => setActiveTab('vps')}
                         label={t.vpsManager}
                         badge="PRO"
+                      />
+                      <SubMenuItem
+                        active={activeTab === 'cameras'}
+                        onClick={() => setActiveTab('cameras')}
+                        label={t.camerasMonitor}
+                        badge="LIVE"
                       />
                     </div>
                   )}
@@ -1076,6 +1082,7 @@ export default function App() {
             {activeTab === 'social' && <SocialHubTab t={t} lang={lang} onToast={showToast} />}
             {activeTab === 'vps' && <VpsManagerTab t={t} lang={lang} onToast={showToast} />}
             {activeTab === 'media' && <MediaStudioTab t={t} lang={lang} onToast={showToast} />}
+            {activeTab === 'cameras' && <CamerasMonitorTab t={t} lang={lang} onToast={showToast} />}
           </main>
 
           {agentOpen && <AIAgentDrawer t={t} lang={lang} onClose={() => setAgentOpen(false)} onToast={showToast} />}
@@ -4531,7 +4538,519 @@ function MediaStudioTab({
 }
 
 /* ============================================================================
-   8. AI AGENT CHAT DRAWER
+   8. SECURITY CAMERAS MONITOR TAB (IMOU LIFE & TP-LINK TAPO RTSP)
+============================================================================ */
+function CamerasMonitorTab({
+  lang,
+  onToast,
+}: {
+  t: typeof translations['en'];
+  lang: Lang;
+  onToast: (m: string, t?: 'ok' | 'err') => void;
+}) {
+  const isVi = lang === 'vi';
+  const [cameras, setCameras] = useState<any[]>([]);
+  const [addingOpen, setAddingOpen] = useState(false);
+  const [gridCols, setGridCols] = useState<1 | 2 | 3>(2);
+  const [liveMap, setLiveMap] = useState<Record<string, boolean>>({});
+  const [streamNonce, setStreamNonce] = useState<Record<string, number>>({});
+  const [snapshottingId, setSnapshottingId] = useState<string | null>(null);
+
+  // LAN Auto-Discovery State
+  const [discovering, setDiscovering] = useState(false);
+  const [discovered, setDiscovered] = useState<Array<{ ip: string; port: number }>>([]);
+  const [discoveredSubnet, setDiscoveredSubnet] = useState('');
+
+  // Add Camera Form
+  const [brand, setBrand] = useState<'tapo' | 'imou' | 'custom'>('tapo');
+  const [name, setName] = useState('');
+  const [host, setHost] = useState('');
+  const [port, setPort] = useState('554');
+  const [username, setUsername] = useState('');
+  const [password, setPassword] = useState('');
+  const [quality, setQuality] = useState<'hd' | 'sd'>('hd');
+  const [customRtspUrl, setCustomRtspUrl] = useState('');
+  const [location, setLocation] = useState('');
+
+  const loadCameras = async () => {
+    try {
+      const res = await fetch('/api/cameras');
+      const data = await res.json();
+      setCameras(data.cameras || []);
+    } catch {
+      // ignore
+    }
+  };
+
+  useEffect(() => {
+    loadCameras();
+  }, []);
+
+  const handleSelectBrand = (next: 'tapo' | 'imou' | 'custom') => {
+    setBrand(next);
+    if (next === 'imou') {
+      setUsername('admin');
+    } else if (next === 'tapo' && username === 'admin') {
+      setUsername('');
+    }
+  };
+
+  const handleDiscoverLan = async () => {
+    setDiscovering(true);
+    try {
+      const res = await fetch('/api/cameras/discover');
+      const data = await res.json();
+      setDiscovered(data.devices || []);
+      setDiscoveredSubnet(data.subnet || '');
+      onToast(
+        isVi
+          ? `Tìm thấy ${(data.devices || []).length} camera mở cổng RTSP (554) trong mạng ${data.subnet}`
+          : `Found ${(data.devices || []).length} RTSP cameras (port 554) on ${data.subnet}`
+      );
+    } finally {
+      setDiscovering(false);
+    }
+  };
+
+  const handleSaveCamera = async (e: React.FormEvent) => {
+    e.preventDefault();
+    if (brand !== 'custom' && !host.trim()) return;
+    const res = await fetch('/api/cameras', {
+      method: 'POST',
+      headers: { 'Content-Type': 'application/json' },
+      body: JSON.stringify({
+        name: name.trim() || `${brand === 'imou' ? 'Imou' : brand === 'tapo' ? 'Tapo' : 'IP'} Camera`,
+        brand,
+        host: host.trim(),
+        port: Number(port) || 554,
+        username: username.trim() || (brand === 'imou' ? 'admin' : ''),
+        password,
+        quality,
+        customRtspUrl: brand === 'custom' ? customRtspUrl.trim() : undefined,
+        location: location.trim(),
+      }),
+    });
+    const data = await res.json();
+    if (data.ok) {
+      onToast(isVi ? 'Đã thêm camera thành công!' : 'Camera saved!');
+      setAddingOpen(false);
+      setName('');
+      setHost('');
+      setPassword('');
+      setCustomRtspUrl('');
+      loadCameras();
+    } else {
+      onToast(data.message || 'Failed to save camera', 'err');
+    }
+  };
+
+  const handleDeleteCamera = async (id: string) => {
+    setLiveMap((prev) => ({ ...prev, [id]: false }));
+    const res = await fetch(`/api/cameras/${id}`, { method: 'DELETE' });
+    if (res.ok) {
+      onToast(isVi ? 'Đã xóa camera' : 'Camera removed');
+      loadCameras();
+    }
+  };
+
+  const toggleLiveStream = (id: string) => {
+    setLiveMap((prev) => {
+      const next = !prev[id];
+      if (next) {
+        setStreamNonce((n) => ({ ...n, [id]: Date.now() }));
+      }
+      return { ...prev, [id]: next };
+    });
+  };
+
+  const handleSnapshot = async (id: string) => {
+    setSnapshottingId(id);
+    try {
+      const res = await fetch(`/api/cameras/${id}/snapshot`, { method: 'POST' });
+      const data = await res.json();
+      onToast(data.message, data.ok ? 'ok' : 'err');
+    } finally {
+      setSnapshottingId(null);
+    }
+  };
+
+  const secToken = localStorage.getItem('smartmac_sec_token') || '';
+  const getStreamUrl = (id: string) =>
+    `/api/cameras/${id}/stream?t=${streamNonce[id] || 1}${secToken ? `&token=${encodeURIComponent(secToken)}` : ''}`;
+
+  return (
+    <div className="space-y-5">
+      {/* Header Bar */}
+      <div className="bg-white p-4 rounded-xl border border-slate-200 shadow-2xs flex flex-wrap items-center justify-between gap-3">
+        <div>
+          <div className="flex items-center gap-2">
+            <h3 className="text-sm font-bold text-slate-900">
+              {isVi
+                ? 'Giám Sát Camera An Ninh (Imou Life & TP-Link Tapo)'
+                : 'Security Camera Monitor (Imou Life & TP-Link Tapo)'}
+            </h3>
+            <span className="text-[10px] font-bold px-2 py-0.5 rounded-full bg-emerald-50 text-emerald-700 border border-emerald-200">
+              RTSP LIVE
+            </span>
+          </div>
+          <p className="text-xs text-slate-500 mt-0.5">
+            {isVi
+              ? 'Xem trực tiếp nhiều camera Imou & Tapo qua mạng LAN nội bộ (không cần đám mây trả phí) và chụp ảnh lưu về máy.'
+              : 'Stream live Imou Life & TP-Link Tapo cameras over your local LAN via RTSP and capture HD snapshots.'}
+          </p>
+        </div>
+
+        <div className="flex flex-wrap items-center gap-2">
+          {/* Grid layout selector */}
+          <div className="flex rounded-lg bg-slate-100 p-0.5 border border-slate-200 text-xs font-bold">
+            {([1, 2, 3] as const).map((cols) => (
+              <button
+                key={cols}
+                onClick={() => setGridCols(cols)}
+                className={`px-2.5 py-1 rounded-md cursor-pointer transition ${
+                  gridCols === cols ? 'bg-white text-[#F26522] shadow-2xs' : 'text-slate-500 hover:text-slate-800'
+                }`}
+              >
+                {cols}×{cols}
+              </button>
+            ))}
+          </div>
+
+          <button
+            onClick={handleDiscoverLan}
+            disabled={discovering}
+            className="flex items-center gap-1.5 px-3.5 py-2 rounded-lg bg-slate-100 hover:bg-slate-200 text-slate-700 text-xs font-semibold cursor-pointer disabled:opacity-50"
+          >
+            <RefreshCw className={`w-3.5 h-3.5 ${discovering ? 'animate-spin' : ''}`} />
+            <span>{discovering ? (isVi ? 'Đang quét LAN...' : 'Scanning LAN...') : isVi ? 'Quét Camera LAN' : 'Scan LAN Cameras'}</span>
+          </button>
+
+          <button
+            onClick={() => setAddingOpen(!addingOpen)}
+            className="flex items-center gap-1.5 px-4 py-2 rounded-lg bg-[#F26522] hover:bg-orange-600 text-white text-xs font-bold shadow-2xs transition cursor-pointer"
+          >
+            <Video className="w-3.5 h-3.5" />
+            <span>{isVi ? '+ Thêm Camera Imou / Tapo' : '+ Add Imou / Tapo Camera'}</span>
+          </button>
+        </div>
+      </div>
+
+      {/* Discovered LAN RTSP Devices Banner */}
+      {discovered.length > 0 && (
+        <div className="p-4 rounded-xl bg-emerald-50 border border-emerald-200 space-y-2 text-xs">
+          <div className="font-bold text-emerald-800">
+            {isVi
+              ? `Tìm thấy ${discovered.length} thiết bị Camera RTSP trong mạng ${discoveredSubnet}:`
+              : `Discovered ${discovered.length} RTSP camera(s) on ${discoveredSubnet}:`}
+          </div>
+          <div className="flex flex-wrap gap-2">
+            {discovered.map((d) => (
+              <button
+                key={d.ip}
+                onClick={() => {
+                  setHost(d.ip);
+                  setPort(String(d.port));
+                  setAddingOpen(true);
+                }}
+                className="px-3 py-1.5 rounded-lg bg-white hover:bg-[#F26522] hover:text-white text-slate-800 border border-emerald-300 font-mono font-semibold transition cursor-pointer"
+              >
+                📷 {d.ip}:{d.port} ({isVi ? 'Nhấn để thêm' : 'Click to add'})
+              </button>
+            ))}
+          </div>
+        </div>
+      )}
+
+      {/* Add Camera Form with Imou & Tapo Quick Presets */}
+      {addingOpen && (
+        <form onSubmit={handleSaveCamera} className="p-5 rounded-xl bg-white border-2 border-orange-200 shadow-sm space-y-4 text-xs">
+          <div className="flex flex-wrap items-center justify-between gap-2">
+            <h4 className="text-sm font-bold text-slate-900">
+              {isVi ? 'Thêm Camera Imou Life / TP-Link Tapo' : 'Add Imou Life / TP-Link Tapo Camera'}
+            </h4>
+            <div className="flex gap-1.5">
+              {(['tapo', 'imou', 'custom'] as const).map((b) => (
+                <button
+                  key={b}
+                  type="button"
+                  onClick={() => handleSelectBrand(b)}
+                  className={`px-3 py-1.5 rounded-lg font-bold transition cursor-pointer ${
+                    brand === b
+                      ? 'bg-[#F26522] text-white'
+                      : 'bg-slate-100 text-slate-600 hover:bg-slate-200'
+                  }`}
+                >
+                  {b === 'tapo' ? 'TP-Link Tapo' : b === 'imou' ? 'Imou Life HD' : 'Custom RTSP'}
+                </button>
+              ))}
+            </div>
+          </div>
+
+          {/* Brand-specific setup hint */}
+          <div className="p-3 rounded-lg bg-slate-50 border border-slate-200 text-[11px] text-slate-600">
+            {brand === 'tapo' && (
+              <span>
+                <strong>TP-Link Tapo:</strong>{' '}
+                {isVi
+                  ? 'Mở app Tapo → Cài đặt Camera → Cài đặt nâng cao (Advanced Settings) → Tài khoản Camera (Camera Account) để tạo Username & Password cục bộ.'
+                  : 'In the Tapo app → Camera Settings → Advanced Settings → Camera Account to create a local Username & Password.'}
+              </span>
+            )}
+            {brand === 'imou' && (
+              <span>
+                <strong>Imou Life HD:</strong>{' '}
+                {isVi
+                  ? 'Username mặc định là "admin", Password là Mã An Toàn (Safety Code / Verification Code) in trên tem dưới đáy camera Imou.'
+                  : 'Default username is "admin", and password is the Safety Code printed on the sticker under your Imou camera.'}
+              </span>
+            )}
+            {brand === 'custom' && (
+              <span>
+                <strong>Custom RTSP:</strong>{' '}
+                {isVi
+                  ? 'Nhập đường dẫn rtsp:// đầy đủ cho bất kỳ camera IP ONVIF / Hikvision / Ezviz / Dahua nào.'
+                  : 'Paste any standard rtsp:// URL (ONVIF, Hikvision, Ezviz, Dahua, etc.).'}
+              </span>
+            )}
+          </div>
+
+          <div className="grid grid-cols-1 sm:grid-cols-2 md:grid-cols-3 gap-3.5">
+            <div>
+              <label className="text-[11px] text-slate-500 block mb-1">{isVi ? 'Tên Camera' : 'Camera Name'}</label>
+              <input
+                type="text"
+                value={name}
+                onChange={(e) => setName(e.target.value)}
+                placeholder={brand === 'imou' ? 'Imou Phòng Khách' : 'Tapo Cổng Trước'}
+                className="w-full px-3 py-1.5 rounded-lg bg-slate-50 border border-slate-200 text-slate-800"
+              />
+            </div>
+
+            {brand !== 'custom' ? (
+              <>
+                <div>
+                  <label className="text-[11px] text-slate-500 block mb-1">Camera IP Address *</label>
+                  <input
+                    type="text"
+                    required
+                    value={host}
+                    onChange={(e) => setHost(e.target.value)}
+                    placeholder="192.168.0.105"
+                    className="w-full px-3 py-1.5 rounded-lg bg-slate-50 border border-slate-200 text-slate-800 font-mono"
+                  />
+                </div>
+                <div className="grid grid-cols-2 gap-2">
+                  <div>
+                    <label className="text-[11px] text-slate-500 block mb-1">RTSP Port</label>
+                    <input
+                      type="number"
+                      value={port}
+                      onChange={(e) => setPort(e.target.value)}
+                      className="w-full px-3 py-1.5 rounded-lg bg-slate-50 border border-slate-200 text-slate-800 font-mono"
+                    />
+                  </div>
+                  <div>
+                    <label className="text-[11px] text-slate-500 block mb-1">{isVi ? 'Chất lượng' : 'Quality'}</label>
+                    <select
+                      value={quality}
+                      onChange={(e) => setQuality(e.target.value as 'hd' | 'sd')}
+                      className="w-full px-2.5 py-1.5 rounded-lg bg-slate-50 border border-slate-200 text-slate-800"
+                    >
+                      <option value="hd">HD (Main Stream)</option>
+                      <option value="sd">SD (Sub Stream)</option>
+                    </select>
+                  </div>
+                </div>
+                <div>
+                  <label className="text-[11px] text-slate-500 block mb-1">
+                    {brand === 'imou' ? 'Username (admin)' : 'Tapo Camera Username'}
+                  </label>
+                  <input
+                    type="text"
+                    value={username}
+                    onChange={(e) => setUsername(e.target.value)}
+                    placeholder={brand === 'imou' ? 'admin' : 'tapo_user'}
+                    className="w-full px-3 py-1.5 rounded-lg bg-slate-50 border border-slate-200 text-slate-800 font-mono"
+                  />
+                </div>
+                <div>
+                  <label className="text-[11px] text-slate-500 block mb-1">
+                    {brand === 'imou' ? 'Safety Code / Password' : 'Tapo Camera Password'}
+                  </label>
+                  <input
+                    type="password"
+                    value={password}
+                    onChange={(e) => setPassword(e.target.value)}
+                    placeholder="••••••••"
+                    className="w-full px-3 py-1.5 rounded-lg bg-slate-50 border border-slate-200 text-slate-800"
+                  />
+                </div>
+              </>
+            ) : (
+              <div className="sm:col-span-2">
+                <label className="text-[11px] text-slate-500 block mb-1">Full RTSP Stream URL *</label>
+                <input
+                  type="text"
+                  required
+                  value={customRtspUrl}
+                  onChange={(e) => setCustomRtspUrl(e.target.value)}
+                  placeholder="rtsp://user:pass@192.168.0.105:554/stream1"
+                  className="w-full px-3 py-1.5 rounded-lg bg-slate-50 border border-slate-200 text-slate-800 font-mono"
+                />
+              </div>
+            )}
+
+            <div className="flex items-end gap-2">
+              <button
+                type="submit"
+                className="flex-1 py-1.5 rounded-lg bg-[#F26522] hover:bg-orange-600 text-white font-bold cursor-pointer"
+              >
+                {isVi ? 'Lưu Camera' : 'Save Camera'}
+              </button>
+              <button
+                type="button"
+                onClick={() => setAddingOpen(false)}
+                className="px-3 py-1.5 rounded-lg bg-slate-100 text-slate-600 font-semibold cursor-pointer"
+              >
+                {isVi ? 'Hủy' : 'Cancel'}
+              </button>
+            </div>
+          </div>
+        </form>
+      )}
+
+      {/* Camera Live Grid */}
+      {cameras.length === 0 ? (
+        <div className="bg-white rounded-xl border border-dashed border-slate-300 p-12 text-center space-y-3">
+          <div className="w-12 h-12 rounded-2xl bg-orange-50 text-[#F26522] flex items-center justify-center mx-auto">
+            <Video className="w-6 h-6" />
+          </div>
+          <div className="text-sm font-bold text-slate-800">
+            {isVi ? 'Chưa có Camera Imou hoặc Tapo nào được kết nối' : 'No Imou or Tapo Cameras Added Yet'}
+          </div>
+          <p className="text-xs text-slate-500 max-w-md mx-auto">
+            {isVi
+              ? 'Bấm "Quét Camera LAN" để tự động dò tìm IP camera trong mạng Wi-Fi nhà bạn, hoặc bấm "+ Thêm Camera Imou / Tapo" để nhập trực tiếp.'
+              : 'Click "Scan LAN Cameras" to auto-detect RTSP cameras on your local Wi-Fi, or click "+ Add Imou / Tapo Camera" to connect.'}
+          </p>
+          <div className="flex items-center justify-center gap-2 pt-1">
+            <button
+              onClick={handleDiscoverLan}
+              disabled={discovering}
+              className="px-4 py-2 rounded-lg bg-slate-100 hover:bg-slate-200 text-slate-700 text-xs font-bold cursor-pointer"
+            >
+              {isVi ? 'Quét Camera LAN' : 'Scan LAN Cameras'}
+            </button>
+            <button
+              onClick={() => setAddingOpen(true)}
+              className="px-4 py-2 rounded-lg bg-[#F26522] hover:bg-orange-600 text-white text-xs font-bold cursor-pointer"
+            >
+              {isVi ? '+ Thêm Camera Ngay' : '+ Add Camera Now'}
+            </button>
+          </div>
+        </div>
+      ) : (
+        <div
+          className={`grid gap-4 ${
+            gridCols === 1 ? 'grid-cols-1' : gridCols === 3 ? 'grid-cols-1 md:grid-cols-2 xl:grid-cols-3' : 'grid-cols-1 lg:grid-cols-2'
+          }`}
+        >
+          {cameras.map((cam) => {
+            const isLive = Boolean(liveMap[cam.id]);
+            return (
+              <div
+                key={cam.id}
+                className="bg-white rounded-xl border border-slate-200 shadow-2xs overflow-hidden flex flex-col"
+              >
+                {/* Video Viewport */}
+                <div className="relative aspect-video bg-slate-950 flex items-center justify-center overflow-hidden">
+                  {isLive ? (
+                    <img
+                      src={getStreamUrl(cam.id)}
+                      alt={cam.name}
+                      className="w-full h-full object-contain"
+                    />
+                  ) : (
+                    <div className="text-center space-y-2 p-4">
+                      <Video className="w-8 h-8 text-slate-600 mx-auto" />
+                      <div className="text-xs text-slate-400 font-medium">
+                        {cam.name} ({cam.host || 'Custom RTSP'})
+                      </div>
+                      <button
+                        onClick={() => toggleLiveStream(cam.id)}
+                        className="px-4 py-1.5 rounded-lg bg-[#F26522] hover:bg-orange-600 text-white text-xs font-bold cursor-pointer inline-flex items-center gap-1.5"
+                      >
+                        <Play className="w-3.5 h-3.5" />
+                        <span>{isVi ? 'Xem Trực Tiếp' : 'Start Live View'}</span>
+                      </button>
+                    </div>
+                  )}
+
+                  {/* Brand & Live Badges */}
+                  <div className="absolute top-2.5 left-2.5 flex items-center gap-1.5">
+                    <span className="px-2 py-0.5 rounded bg-black/75 text-white text-[10px] font-bold uppercase">
+                      {cam.brand === 'imou' ? 'IMOU LIFE' : cam.brand === 'tapo' ? 'TP-LINK TAPO' : 'RTSP'}
+                    </span>
+                    {isLive && (
+                      <span className="px-2 py-0.5 rounded bg-rose-600 text-white text-[10px] font-bold flex items-center gap-1">
+                        <span className="w-1.5 h-1.5 rounded-full bg-white animate-pulse" />
+                        LIVE
+                      </span>
+                    )}
+                  </div>
+                </div>
+
+                {/* Camera Controls Footer */}
+                <div className="p-3.5 flex items-center justify-between gap-2 bg-white border-t border-slate-100">
+                  <div className="min-w-0">
+                    <div className="text-xs font-bold text-slate-900 truncate">{cam.name}</div>
+                    <div className="text-[11px] font-mono text-slate-400 truncate">
+                      {cam.host ? `${cam.host}:${cam.port}` : 'Custom RTSP'} • {cam.quality?.toUpperCase()}
+                    </div>
+                  </div>
+
+                  <div className="flex items-center gap-1.5 shrink-0">
+                    <button
+                      onClick={() => toggleLiveStream(cam.id)}
+                      className={`px-3 py-1.5 rounded-lg text-xs font-bold flex items-center gap-1 cursor-pointer transition ${
+                        isLive
+                          ? 'bg-rose-50 text-rose-600 border border-rose-200 hover:bg-rose-100'
+                          : 'bg-emerald-50 text-emerald-700 border border-emerald-200 hover:bg-emerald-100'
+                      }`}
+                    >
+                      {isLive ? <Square className="w-3 h-3" /> : <Play className="w-3 h-3" />}
+                      <span>{isLive ? (isVi ? 'Dừng' : 'Stop') : (isVi ? 'Xem' : 'Play')}</span>
+                    </button>
+
+                    <button
+                      onClick={() => handleSnapshot(cam.id)}
+                      disabled={snapshottingId === cam.id}
+                      className="p-1.5 rounded-lg bg-slate-100 hover:bg-slate-200 text-slate-700 cursor-pointer disabled:opacity-50"
+                      title={isVi ? 'Chụp ảnh từ Camera lưu vào SmartMac-Captures' : 'Capture HD Snapshot'}
+                    >
+                      <Camera className="w-3.5 h-3.5" />
+                    </button>
+
+                    <button
+                      onClick={() => handleDeleteCamera(cam.id)}
+                      className="p-1.5 rounded-lg text-rose-500 hover:bg-rose-50 cursor-pointer"
+                      title="Delete Camera"
+                    >
+                      <Trash2 className="w-3.5 h-3.5" />
+                    </button>
+                  </div>
+                </div>
+              </div>
+            );
+          })}
+        </div>
+      )}
+    </div>
+  );
+}
+
+/* ============================================================================
+   9. AI AGENT CHAT DRAWER
 ============================================================================ */
 function AIAgentDrawer({
   t,

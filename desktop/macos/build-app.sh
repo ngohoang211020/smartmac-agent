@@ -67,8 +67,9 @@ echo "  ➜ Node.js      : $NODE_BIN"
 echo "  ➜ Install to   : $APP_DIR"
 echo "  ➜ App port     : $PORT"
 
-# Stop any running instance before replacing the bundle
+# Stop any running instance (both Swift shell and Node server on APP port) before replacing the bundle
 pkill -f "$APP_DIR/Contents/MacOS/$APP_NAME" 2>/dev/null || true
+lsof -tiTCP:"$PORT" -sTCP:LISTEN 2>/dev/null | xargs kill -9 2>/dev/null || true
 sleep 0.5
 
 rm -rf "$APP_DIR"

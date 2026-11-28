@@ -344,6 +344,76 @@ export async function findNativeAppWindowId(appQuery: string): Promise<{
 }
 
 /**
+ * Captures a single live JPEG frame of an installed macOS app window (ImouLife HD / Tapo)
+ * Works reliably across macOS WKWebView, Safari, and Chrome without multipart MJPEG quirks.
+ */
+export async function captureNativeAppWindowFrame(
+  appKey: string
+): Promise<{ ok: boolean; buffer?: Buffer; error?: string; needsScreenPermission?: boolean }> {
+  if (os.platform() !== 'darwin') {
+    return { ok: false, error: 'Native window embed is supported on macOS' };
+  }
+
+  const queryMap: Record<string, { query: string; appPath: string }> = {
+    imou: { query: 'Imou', appPath: '/Applications/ImouLife HD.app' },
+    tapo: { query: 'Tapo', appPath: '/Applications/Tapo.app' },
+  };
+  const target = queryMap[appKey.toLowerCase()];
+  if (!target) {
+    return { ok: false, error: 'Unknown app key' };
+  }
+
+  let win = await findNativeAppWindowId(target.query);
+  if (!win.found && fsSync.existsSync(target.appPath)) {
+    await execFileAsync('open', ['-g', target.appPath]).catch(() => {});
+    await new Promise((r) => setTimeout(r, 1500));
+    win = await findNativeAppWindowId(target.query);
+  }
+
+  if (!win.found || !win.windowId) {
+    return { ok: false, error: `${target.query} window not found. Please open ${target.appPath}.` };
+  }
+
+  const tmpFile = path.join(os.tmpdir(), `smartmac-frame-${appKey}-${process.pid}.jpg`);
+  try {
+    await execFileAsync(
+      'screencapture',
+      ['-l', String(win.windowId), '-o', '-x', '-t', 'jpg', tmpFile],
+      { timeout: 3000 }
+    );
+    if (fsSync.existsSync(tmpFile)) {
+      const buffer = await fs.readFile(tmpFile);
+      await fs.unlink(tmpFile).catch(() => {});
+      if (buffer.length > 0) {
+        return { ok: true, buffer };
+      }
+    }
+    return {
+      ok: false,
+      error: 'macOS blocked window capture — enable Screen Recording for SmartMac in System Settings.',
+      needsScreenPermission: true,
+    };
+  } catch (err: any) {
+    await fs.unlink(tmpFile).catch(() => {});
+    return {
+      ok: false,
+      error: err.message || 'Window capture failed',
+      needsScreenPermission: true,
+    };
+  }
+}
+
+export async function openMacScreenRecordingSettings(): Promise<{ ok: boolean; message: string }> {
+  if (os.platform() !== 'darwin') return { ok: false, message: 'macOS only' };
+  try {
+    await execFileAsync('open', ['x-apple.systempreferences:com.apple.preference.security?Privacy_ScreenCapture']);
+    return { ok: true, message: 'Opened macOS Screen Recording Settings. Enable SmartMac and restart.' };
+  } catch (err: any) {
+    return { ok: false, message: err.message };
+  }
+}
+
+/**
  * Zero-popup Live MJPEG stream of an installed macOS app window (e.g. "ImouLife" or "Tapo")
  * Automatically finds the CGWindowID and streams frames directly into an <img> tag in the web UI.
  */

@@ -4803,10 +4803,16 @@ function CamerasMonitorTab({
               {/* Embedded Live Viewport */}
               <div className="relative aspect-video bg-slate-950 flex items-center justify-center overflow-hidden">
                 {isEmbedded ? (
-                  <img
-                    src={streamSrc}
-                    alt={nativeApp.label}
-                    className="w-full h-full object-contain"
+                  <LiveNativeAppFrame
+                    appKey={nativeApp.key}
+                    label={nativeApp.label}
+                    secToken={secToken}
+                    isVi={isVi}
+                    onOpenScreenSettings={async () => {
+                      const res = await fetch('/api/cameras/screen-permission-settings', { method: 'POST' });
+                      const data = await res.json();
+                      onToast(data.message, data.ok ? 'ok' : 'err');
+                    }}
                   />
                 ) : (
                   <div className="text-center space-y-3 p-5">
@@ -5203,6 +5209,95 @@ function CamerasMonitorTab({
       )}
     </div>
   );
+}
+
+function LiveNativeAppFrame({
+  appKey,
+  label,
+  secToken,
+  isVi,
+  onOpenScreenSettings,
+}: {
+  appKey: 'imou' | 'tapo';
+  label: string;
+  secToken: string;
+  isVi: boolean;
+  onOpenScreenSettings: () => void;
+}) {
+  const [frameUrl, setFrameUrl] = useState<string>('');
+  const [errorMsg, setErrorMsg] = useState<string>('');
+  const activeRef = useRef(true);
+
+  useEffect(() => {
+    activeRef.current = true;
+    let objectUrl: string | null = null;
+
+    const loop = async () => {
+      while (activeRef.current) {
+        try {
+          const url = `/api/cameras/native/${appKey}/frame?t=${Date.now()}${
+            secToken ? `&token=${encodeURIComponent(secToken)}` : ''
+          }`;
+          const res = await fetch(url);
+          if (res.ok) {
+            const blob = await res.blob();
+            const nextObj = URL.createObjectURL(blob);
+            if (activeRef.current) {
+              setFrameUrl(nextObj);
+              setErrorMsg('');
+            }
+            if (objectUrl) URL.revokeObjectURL(objectUrl);
+            objectUrl = nextObj;
+          } else {
+            const errJson = await res.json().catch(() => ({}));
+            if (activeRef.current) {
+              setErrorMsg(errJson.error || 'Waiting for app window...');
+            }
+            await new Promise((r) => setTimeout(r, 1200));
+          }
+        } catch {
+          await new Promise((r) => setTimeout(r, 1000));
+        }
+        await new Promise((r) => setTimeout(r, 250));
+      }
+    };
+
+    loop();
+    return () => {
+      activeRef.current = false;
+      if (objectUrl) URL.revokeObjectURL(objectUrl);
+    };
+  }, [appKey, secToken]);
+
+  if (errorMsg && !frameUrl) {
+    return (
+      <div className="p-5 text-center space-y-2.5">
+        <div className="text-xs font-bold text-amber-400">{errorMsg}</div>
+        <p className="text-[11px] text-slate-400 max-w-xs mx-auto">
+          {isVi
+            ? `Hãy chắc chắn bạn đã bật quyền "Screen & System Audio Recording" cho SmartMac và mở cửa sổ ${label}.`
+            : `Ensure "Screen & System Audio Recording" is enabled for SmartMac in macOS Privacy settings and ${label} is open.`}
+        </p>
+        <button
+          onClick={onOpenScreenSettings}
+          className="px-3 py-1.5 rounded-lg bg-[#F26522] hover:bg-orange-600 text-white text-xs font-bold cursor-pointer"
+        >
+          {isVi ? 'Mở Cài đặt Screen Recording ↗' : 'Open Screen Recording Settings ↗'}
+        </button>
+      </div>
+    );
+  }
+
+  if (!frameUrl) {
+    return (
+      <div className="flex items-center gap-2 text-xs text-slate-400">
+        <RefreshCw className="w-4 h-4 animate-spin text-[#F26522]" />
+        <span>{isVi ? `Đang kết nối cửa sổ ${label}...` : `Connecting to ${label} window...`}</span>
+      </div>
+    );
+  }
+
+  return <img src={frameUrl} alt={label} className="w-full h-full object-contain" />;
 }
 
 function EmbeddedCameraCard({

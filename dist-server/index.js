@@ -13,7 +13,7 @@ import { getNetworkOverview, scanWifiNetworks, toggleWifiPower, runPingDiagnosti
 import { loadConfig, saveConfig, resetGmailSession, getGmailOAuthUrl, handleGmailOAuthCallback, fetchGmailMessages, fetchUnreadGmail3Days, sendGmailMessage, openExternalWebApp, } from './services/social.js';
 import { listVpsServers, saveVpsServer, deleteVpsServer, launchNativeSshTerminal, executeRemoteVpsCommand, listLocalSshKeys, } from './services/vps.js';
 import { MEDIA_CAPTURES_DIR, listCapturedMedia, takeNativeOsScreenshot, saveBase64MediaFile, deleteMediaFile, } from './services/media.js';
-import { listCameras, saveCamera, deleteCamera, discoverLanCameras, streamCameraMjpeg, captureCameraSnapshot, streamNativeAppWindowMjpeg, findNativeAppWindowId, } from './services/cameras.js';
+import { listCameras, saveCamera, deleteCamera, discoverLanCameras, streamCameraMjpeg, captureCameraSnapshot, streamNativeAppWindowMjpeg, findNativeAppWindowId, captureNativeAppWindowFrame, openMacScreenRecordingSettings, } from './services/cameras.js';
 import { processAgentMessage } from './services/agent.js';
 import { strictLocalOriginGuard, adminPinAuthGuard, getSecurityStatus, saveSecurityPin, verifySecurityPin, } from './security.js';
 const __filename = fileURLToPath(import.meta.url);
@@ -489,6 +489,22 @@ app.get('/api/cameras/native/:appKey/status', async (req, res) => {
 });
 app.get('/api/cameras/native/:appKey/stream', (req, res) => {
     streamNativeAppWindowMjpeg(req.params.appKey, req, res);
+});
+app.get('/api/cameras/native/:appKey/frame', async (req, res) => {
+    const result = await captureNativeAppWindowFrame(req.params.appKey);
+    if (result.ok && result.buffer) {
+        res.setHeader('Content-Type', 'image/jpeg');
+        res.setHeader('Cache-Control', 'no-store');
+        return res.send(result.buffer);
+    }
+    res.status(result.needsScreenPermission ? 403 : 404).json({
+        error: result.error || 'Frame unavailable',
+        needsScreenPermission: Boolean(result.needsScreenPermission),
+    });
+});
+app.post('/api/cameras/screen-permission-settings', async (_req, res) => {
+    const result = await openMacScreenRecordingSettings();
+    res.json(result);
 });
 // --- AI AGENT CHAT ROUTE ---
 app.post('/api/agent/chat', async (req, res) => {

@@ -4735,70 +4735,88 @@ function CamerasMonitorTab({
         </div>
       </div>
 
-      {/* Cloud Login Info & 1-Click App Launchers for Gmail-Linked Tapo / Imou Accounts */}
-      <div className="bg-white p-4 rounded-xl border border-slate-200 shadow-2xs flex flex-wrap items-center justify-between gap-3 text-xs">
-        <div className="space-y-0.5 max-w-2xl">
-          <div className="font-bold text-slate-900">
-            {isVi
-              ? 'Đăng nhập bằng tài khoản Gmail (Cloud) vs. Xem trực tiếp qua LAN (RTSP)'
-              : 'Gmail Cloud Account vs. Local LAN Live Stream (RTSP)'}
+      {/* Installed Native Camera Apps on Mac: ImouLife HD.app & Tapo.app (Gmail Cloud Login) */}
+      <div className="grid grid-cols-1 md:grid-cols-2 gap-4">
+        {[
+          {
+            label: 'ImouLife HD',
+            appPath: '/Applications/ImouLife HD.app',
+            appName: 'ImouLife HD',
+            desc: isVi
+              ? 'Ứng dụng ImouLife HD đã cài trên Mac • Đăng nhập Cloud bằng Gmail'
+              : 'Installed on Mac (/Applications/ImouLife HD.app) • Gmail Cloud Login',
+            fallbackTarget: 'imou_cloud',
+            accent: 'orange',
+          },
+          {
+            label: 'TP-Link Tapo',
+            appPath: '/Applications/Tapo.app',
+            appName: 'Tapo',
+            desc: isVi
+              ? 'Ứng dụng Tapo đã cài trên Mac • Đăng nhập Cloud bằng Gmail'
+              : 'Installed on Mac (/Applications/Tapo.app) • Gmail Cloud Login',
+            fallbackTarget: 'tapo_web',
+            accent: 'blue',
+          },
+        ].map((nativeApp) => (
+          <div
+            key={nativeApp.appPath}
+            className="p-4 rounded-xl bg-white border border-slate-200 shadow-2xs flex items-center justify-between gap-3 hover:border-orange-300 transition"
+          >
+            <div className="flex items-center gap-3 min-w-0">
+              <AppProcessIcon name={nativeApp.appName} appPath={nativeApp.appPath} size="md" />
+              <div className="min-w-0">
+                <div className="flex items-center gap-2">
+                  <span className="text-sm font-bold text-slate-900 truncate">{nativeApp.label}</span>
+                  <span className="text-[10px] font-bold px-1.5 py-0.5 rounded bg-emerald-50 text-emerald-700 border border-emerald-200">
+                    INSTALLED
+                  </span>
+                </div>
+                <div className="text-[11px] text-slate-500 truncate mt-0.5">{nativeApp.desc}</div>
+              </div>
+            </div>
+
+            <div className="flex items-center gap-1.5 shrink-0">
+              <button
+                onClick={async () => {
+                  const res = await fetch('/api/apps/launch', {
+                    method: 'POST',
+                    headers: { 'Content-Type': 'application/json' },
+                    body: JSON.stringify({ appNameOrPath: nativeApp.appPath }),
+                  });
+                  const data = await res.json();
+                  if (!data.ok) {
+                    await fetch('/api/social/open-web', {
+                      method: 'POST',
+                      headers: { 'Content-Type': 'application/json' },
+                      body: JSON.stringify({ target: nativeApp.fallbackTarget }),
+                    });
+                  }
+                  onToast(data.ok ? (isVi ? `Đã mở ${nativeApp.label}` : data.message) : data.message, data.ok ? 'ok' : 'err');
+                }}
+                className="px-3 py-1.5 rounded-lg bg-[#F26522] hover:bg-orange-600 text-white text-xs font-bold flex items-center gap-1.5 cursor-pointer"
+              >
+                <Play className="w-3.5 h-3.5" />
+                <span>{isVi ? 'Mở App' : 'Open'}</span>
+              </button>
+              <button
+                onClick={async () => {
+                  const res = await fetch('/api/apps/quit', {
+                    method: 'POST',
+                    headers: { 'Content-Type': 'application/json' },
+                    body: JSON.stringify({ appName: nativeApp.appName }),
+                  });
+                  const data = await res.json();
+                  onToast(data.message, data.ok ? 'ok' : 'err');
+                }}
+                className="p-2 rounded-lg bg-slate-100 hover:bg-rose-50 text-slate-600 hover:text-rose-600 border border-slate-200 transition cursor-pointer"
+                title={isVi ? `Đóng ${nativeApp.label}` : `Quit ${nativeApp.label}`}
+              >
+                <Square className="w-3.5 h-3.5" />
+              </button>
+            </div>
           </div>
-          <p className="text-[11px] text-slate-500">
-            {isVi
-              ? 'Nếu bạn chỉ đăng nhập Imou / Tapo bằng Gmail (không ở cùng Wi-Fi với camera), hãy mở trực tiếp app Imou Life / Tapo trên Mac. Khi ở cùng mạng Wi-Fi nhà, dùng "Quét Camera LAN" bên trên để xem live RTSP ngay trong SmartMac.'
-              : 'Tapo & Imou do not expose a public Google OAuth API for remote cloud video. Use the quick launchers to open Imou Life / Tapo Desktop with your Gmail account, or use Local RTSP above when on the same Wi-Fi.'}
-          </p>
-        </div>
-        <div className="flex flex-wrap items-center gap-2 shrink-0">
-          <button
-            onClick={async () => {
-              const res = await fetch('/api/apps/launch', {
-                method: 'POST',
-                headers: { 'Content-Type': 'application/json' },
-                body: JSON.stringify({ appNameOrPath: 'Imou Life' }),
-              });
-              const data = await res.json();
-              if (!data.ok) {
-                await fetch('/api/social/open-web', {
-                  method: 'POST',
-                  headers: { 'Content-Type': 'application/json' },
-                  body: JSON.stringify({ target: 'imou_cloud' }),
-                });
-                onToast(isVi ? 'Đã mở trang tải Imou Life cho macOS/Windows' : 'Opened Imou Life desktop download page');
-              } else {
-                onToast(data.message);
-              }
-            }}
-            className="px-3 py-1.5 rounded-lg bg-orange-50 hover:bg-orange-100 text-[#F26522] border border-orange-200 font-bold cursor-pointer flex items-center gap-1.5"
-          >
-            <ExternalLink className="w-3.5 h-3.5" />
-            <span>{isVi ? 'Mở Imou Life (Gmail)' : 'Launch Imou Life (Gmail)'}</span>
-          </button>
-          <button
-            onClick={async () => {
-              const res = await fetch('/api/apps/launch', {
-                method: 'POST',
-                headers: { 'Content-Type': 'application/json' },
-                body: JSON.stringify({ appNameOrPath: 'Tapo' }),
-              });
-              const data = await res.json();
-              if (!data.ok) {
-                await fetch('/api/social/open-web', {
-                  method: 'POST',
-                  headers: { 'Content-Type': 'application/json' },
-                  body: JSON.stringify({ target: 'tapo_web' }),
-                });
-                onToast(isVi ? 'Đã mở trang TP-Link Tapo' : 'Opened TP-Link Tapo portal');
-              } else {
-                onToast(data.message);
-              }
-            }}
-            className="px-3 py-1.5 rounded-lg bg-blue-50 hover:bg-blue-100 text-blue-600 border border-blue-200 font-bold cursor-pointer flex items-center gap-1.5"
-          >
-            <ExternalLink className="w-3.5 h-3.5" />
-            <span>{isVi ? 'Mở TP-Link Tapo (Gmail)' : 'Launch Tapo App (Gmail)'}</span>
-          </button>
-        </div>
+        ))}
       </div>
 
       {/* Discovered LAN RTSP Devices Banner */}
